@@ -64,7 +64,7 @@ impl Preferences {
 
             if entry_path.is_dir() {
                 match entry_path.file_name().and_then(|name| name.to_str()) {
-                    Some("audio") => usage.audio += size,
+                    Some("audio") | Some("librespot-audio") => usage.audio += size,
                     Some("track") | Some("episode") | Some("key") => usage.metadata += size,
                     _ => usage.webapi += size,
                 }

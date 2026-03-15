@@ -492,6 +492,14 @@ impl Player {
     fn pause(&mut self) {
         if let Some(librespot) = &self.librespot {
             librespot.pause();
+            // Emit an immediate Pausing event so the UI updates without
+            // waiting for the async librespot event round-trip.
+            if let PlayerState::Playing { path, position } = self.state {
+                self.sender
+                    .send(PlayerEvent::Pausing { path, position })
+                    .unwrap();
+                self.state = PlayerState::Paused { path, position };
+            }
             return;
         }
         match mem::replace(&mut self.state, PlayerState::Invalid) {
@@ -512,6 +520,14 @@ impl Player {
     fn resume(&mut self) {
         if let Some(librespot) = &self.librespot {
             librespot.play();
+            // Emit an immediate Resuming event so the UI updates without
+            // waiting for the async librespot event round-trip.
+            if let PlayerState::Paused { path, position } = self.state {
+                self.sender
+                    .send(PlayerEvent::Resuming { path, position })
+                    .unwrap();
+                self.state = PlayerState::Playing { path, position };
+            }
             return;
         }
         match mem::replace(&mut self.state, PlayerState::Invalid) {

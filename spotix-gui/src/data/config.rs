@@ -230,7 +230,7 @@ impl Default for Config {
             eq: EqSettings::default(),
             webapi_client_id: None,
             lyrics_appearance: LyricsAppearance::default(),
-            dynamic_playing_bar: false,
+            dynamic_playing_bar: true,
         }
     }
 }
@@ -591,8 +591,8 @@ impl EqBands {
 
 #[derive(Clone, Debug, Eq, PartialEq, Data, Default)]
 pub enum Theme {
-    #[default]
     Light,
+    #[default]
     Dark,
     Custom(String),
 }

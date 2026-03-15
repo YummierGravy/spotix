@@ -552,10 +552,7 @@ impl Lens<EqSettings, EqPreset> for EqPresetLens {
 }
 
 fn theme_options() -> Vec<(String, Theme)> {
-    let mut options = vec![
-        ("Light".to_string(), Theme::Light),
-        ("Dark".to_string(), Theme::Dark),
-    ];
+    let mut options = vec![("Dark".to_string(), Theme::Dark)];
     let mut custom = Vec::new();
     let mut seen = HashSet::new();
 

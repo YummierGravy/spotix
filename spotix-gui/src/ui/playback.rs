@@ -307,6 +307,7 @@ struct QueueRow {
 struct QueueHeader {
     title: Arc<str>,
     subtitle: Option<Arc<str>>,
+    playback_marker: playable::PlaybackMarker,
 }
 
 #[derive(Clone, Data)]
@@ -364,6 +365,7 @@ fn recent_entries(data: &AppState) -> Vector<QueuePanelRow> {
     items.push_back(QueuePanelRow::Header(QueueHeader {
         title: Arc::from("Recently played"),
         subtitle: None,
+        playback_marker: playable::PlaybackMarker::Inactive,
     }));
     for row in rows {
         items.push_back(QueuePanelRow::Item(row));
@@ -457,10 +459,19 @@ fn build_queue_panel_rows(data: &AppState, entries: Vector<QueueEntry>) -> Vecto
         },
     );
 
+    let header_marker = if matches!(data.playback.state, PlaybackState::Playing) {
+        playable::PlaybackMarker::Playing
+    } else if now_playing_id.is_some() {
+        playable::PlaybackMarker::Paused
+    } else {
+        playable::PlaybackMarker::Inactive
+    };
+
     let mut result = Vector::new();
     result.push_back(QueuePanelRow::Header(QueueHeader {
         title: Arc::from("Now playing"),
         subtitle: None,
+        playback_marker: header_marker,
     }));
 
     let mut remaining = Vector::new();
@@ -489,6 +500,7 @@ fn build_queue_panel_rows(data: &AppState, entries: Vector<QueueEntry>) -> Vecto
         result.push_back(QueuePanelRow::Header(QueueHeader {
             title: Arc::from("Next from"),
             subtitle,
+            playback_marker: playable::PlaybackMarker::Inactive,
         }));
         for mut row in remaining {
             row.show_remove = true;
@@ -577,6 +589,14 @@ fn queue_header_widget() -> impl Widget<QueuePanelRow> {
     }
 
     let clear_button = queue_clear_button();
+    let header_indicator = playable::PlaybackIndicator::new().lens(Map::new(
+        |row: &QueuePanelRow| match row {
+            QueuePanelRow::Header(header) => header.playback_marker,
+            _ => playable::PlaybackMarker::Inactive,
+        },
+        |_, _| {},
+    ));
+
     Either::new(
         |row: &QueuePanelRow, _| match row {
             QueuePanelRow::Header(header) => header.title.as_ref() == "Next from",
@@ -594,6 +614,8 @@ fn queue_header_widget() -> impl Widget<QueuePanelRow> {
             .with_child(
                 Flex::row()
                     .with_flex_child(title, 1.0)
+                    .with_spacer(theme::grid(0.5))
+                    .with_child(header_indicator)
                     .with_child(clear_button),
             )
             .with_child(Either::new(
@@ -631,7 +653,13 @@ fn queue_row_widget() -> impl Widget<QueuePanelRow> {
         _ => String::new(),
     })
     .with_line_break_mode(LineBreaking::Clip)
-    .with_font(theme::UI_FONT_MEDIUM);
+    .with_font(theme::UI_FONT_MEDIUM)
+    .with_text_color(theme::FOREGROUND_LIGHT)
+    .env_scope(|env, row: &QueuePanelRow| {
+        if matches!(row, QueuePanelRow::Item(item) if item.is_now_playing) {
+            env.set(theme::FOREGROUND_LIGHT, env.get(theme::BLUE_200));
+        }
+    });
     let duration = Label::dynamic(|row: &QueuePanelRow, _| match row {
         QueuePanelRow::Item(item) => utils::as_minutes_and_seconds(item.entry.item.duration()),
         _ => String::new(),
@@ -653,17 +681,8 @@ fn queue_row_widget() -> impl Widget<QueuePanelRow> {
     let cover = queue_cover_widget(theme::grid(4.0));
     let remove_button = queue_remove_slot();
 
-    let indicator = playable::PlaybackIndicator::new().lens(Map::new(
-        |row: &QueuePanelRow| match row {
-            QueuePanelRow::Item(item) => item.playback_marker,
-            _ => playable::PlaybackMarker::Inactive,
-        },
-        |_, _| {},
-    ));
-
     let title_row = Flex::row()
         .with_flex_child(title, 1.0)
-        .with_child(indicator)
         .with_child(SizedBox::new(Align::right(duration)).fix_width(theme::grid(5.0)));
 
     Flex::row()

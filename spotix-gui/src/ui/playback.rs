@@ -1185,72 +1185,102 @@ where
 }
 
 struct SeekBar {
+    /// Client-side progress anchor: set on track change, seek, or pause/resume.
     base_progress: Duration,
-    last_tick: Option<Instant>,
+    /// When the anchor was set. Used for smooth client-side interpolation.
+    anchor_time: Instant,
+    /// Whether we're running the client clock (playing).
+    clock_running: bool,
+    /// The last backend-reported progress, for drift correction.
+    backend_progress: Duration,
+    /// Smooth display progress (eased toward real progress).
+    display_progress: f64,
+    /// Pulse animation phase.
     pulse_t: f64,
-    /// Cached bar palette + the artwork URL it was derived from.
-    bar_palette_cache: Option<(Arc<str>, palette::BarPalette)>,
+    /// Pre-computed bar palette (updated only on track artwork change).
+    bar_palette: palette::BarPalette,
+    /// Artwork URL the current palette was derived from.
+    palette_url: Option<Arc<str>>,
+    /// Track item id the current palette was derived from (for change detection).
+    current_track_id: Option<spotix_core::item_id::ItemId>,
 }
+
+/// How quickly the display progress eases toward the real progress.
+/// Higher = snappier, lower = smoother. 8-12 is a good range.
+const PROGRESS_LERP_SPEED: f64 = 10.0;
+/// Threshold (in seconds) above which we snap instead of easing.
+const PROGRESS_SNAP_THRESHOLD: f64 = 1.5;
 
 impl SeekBar {
     fn new() -> Self {
         Self {
             base_progress: Duration::ZERO,
-            last_tick: None,
+            anchor_time: Instant::now(),
+            clock_running: false,
+            backend_progress: Duration::ZERO,
+            display_progress: 0.0,
             pulse_t: 0.0,
-            bar_palette_cache: None,
+            bar_palette: palette::BarPalette::default(),
+            palette_url: None,
+            current_track_id: None,
         }
     }
 
-    fn current_progress(&self, np: &NowPlaying) -> Duration {
-        let mut progress = self.base_progress;
-        if np.is_playing
-            && let Some(last_tick) = self.last_tick
-        {
-            progress = progress.saturating_add(last_tick.elapsed());
-        }
-        progress.min(np.item.duration())
+    /// The "true" progress based on client-side clock extrapolation.
+    fn real_progress_secs(&self, duration_secs: f64) -> f64 {
+        let base = self.base_progress.as_secs_f64();
+        let elapsed = if self.clock_running {
+            self.anchor_time.elapsed().as_secs_f64()
+        } else {
+            0.0
+        };
+        (base + elapsed).min(duration_secs)
     }
 
-    fn bar_palette(&mut self, np: &NowPlaying) -> &palette::BarPalette {
+    /// Update the palette if the artwork URL changed. Called from update(),
+    /// never from paint().
+    fn refresh_palette(&mut self, np: &NowPlaying) {
+        let track_id = np.item.id();
+        if self.current_track_id == Some(track_id) {
+            return; // Same track, no work needed
+        }
+        self.current_track_id = Some(track_id);
+
         let url: Option<Arc<str>> = np
             .cover_image_url(64.0, 64.0)
             .or_else(|| np.cover_image_url(32.0, 32.0))
             .map(Arc::from);
 
-        let needs_refresh = match (&self.bar_palette_cache, &url) {
-            (Some((cached_url, _)), Some(new_url)) => cached_url != new_url,
-            (None, Some(_)) => true,
-            (Some(_), None) => true,
-            (None, None) => false,
-        };
-
-        if needs_refresh {
-            if let Some(ref url) = url {
-                let image_buf = WebApi::global()
-                    .get_cached_image(url)
-                    .or_else(|| WebApi::global().get_image(url.clone()).ok());
-                if let Some(buf) = image_buf {
-                    let pal = palette::extract_bar_palette(&buf);
-                    self.bar_palette_cache = Some((url.clone(), pal));
-                } else {
-                    self.bar_palette_cache = Some((url.clone(), palette::BarPalette::default()));
-                }
-            } else {
-                self.bar_palette_cache = None;
-            }
+        if url == self.palette_url {
+            return; // Same artwork URL
         }
+        self.palette_url = url.clone();
 
-        self.bar_palette_cache
-            .as_ref()
-            .map(|(_, p)| p)
-            .unwrap_or_else(|| {
-                // Return a static default; this is fine because we only hold a ref
-                // for the duration of one paint call.
-                static DEFAULT: std::sync::LazyLock<palette::BarPalette> =
-                    std::sync::LazyLock::new(palette::BarPalette::default);
-                &DEFAULT
-            })
+        if let Some(ref url) = url {
+            let image_buf = WebApi::global()
+                .get_cached_image(url)
+                .or_else(|| WebApi::global().get_image(url.clone()).ok());
+            if let Some(buf) = image_buf {
+                self.bar_palette = palette::extract_bar_palette(&buf);
+            } else {
+                self.bar_palette = palette::BarPalette::default();
+            }
+        } else {
+            self.bar_palette = palette::BarPalette::default();
+        }
+    }
+
+    /// Anchor the clock to a new base without disrupting smooth animation.
+    fn anchor_to(&mut self, progress: Duration, playing: bool) {
+        self.base_progress = progress;
+        self.anchor_time = Instant::now();
+        self.clock_running = playing;
+        self.backend_progress = progress;
+    }
+
+    /// Snap the display progress immediately (for track changes / seeks).
+    fn snap_display(&mut self, duration_secs: f64) {
+        self.display_progress = self.real_progress_secs(duration_secs);
     }
 }
 
@@ -1283,12 +1313,33 @@ impl Widget<AppState> for SeekBar {
                 }
             }
             Event::AnimFrame(interval) => {
+                let dt = (*interval as f64) * 1e-9;
+
+                // Advance pulse
                 if is_playing {
-                    self.pulse_t += (*interval as f64) * 1e-9;
+                    self.pulse_t += dt;
                     if self.pulse_t >= 60.0 {
                         self.pulse_t -= 60.0;
                     }
-                    ctx.request_paint();
+                }
+
+                // Smooth progress: ease display_progress toward real_progress
+                if let Some(np) = &data.playback.now_playing {
+                    let duration = np.item.duration().as_secs_f64();
+                    let target = self.real_progress_secs(duration);
+                    let diff = target - self.display_progress;
+
+                    if diff.abs() > PROGRESS_SNAP_THRESHOLD {
+                        // Large jump (seek/track change) -- snap immediately
+                        self.display_progress = target;
+                    } else {
+                        // Smooth ease toward target
+                        self.display_progress += diff * (PROGRESS_LERP_SPEED * dt).min(1.0);
+                    }
+                }
+
+                ctx.request_paint();
+                if is_playing {
                     ctx.request_anim_frame();
                 }
             }
@@ -1300,11 +1351,25 @@ impl Widget<AppState> for SeekBar {
         &mut self,
         ctx: &mut LifeCycleCtx,
         event: &LifeCycle,
-        _data: &AppState,
+        data: &AppState,
         _env: &Env,
     ) {
-        if let LifeCycle::HotChanged(_) = event {
-            ctx.request_paint();
+        match event {
+            LifeCycle::WidgetAdded => {
+                if let Some(np) = &data.playback.now_playing {
+                    let duration = np.item.duration().as_secs_f64();
+                    self.anchor_to(np.progress, np.is_playing);
+                    self.snap_display(duration);
+                    self.refresh_palette(np);
+                    if np.is_playing {
+                        ctx.request_anim_frame();
+                    }
+                }
+            }
+            LifeCycle::HotChanged(_) => {
+                ctx.request_paint();
+            }
+            _ => {}
         }
     }
 
@@ -1317,24 +1382,67 @@ impl Widget<AppState> for SeekBar {
     ) {
         let old_np = &old_data.playback.now_playing;
         let new_np = &data.playback.now_playing;
-        if !old_np.same(new_np) {
-            if let Some(np) = new_np {
-                self.base_progress = np.progress;
-                self.last_tick = np.is_playing.then_some(Instant::now());
-                if np.is_playing {
-                    ctx.request_anim_frame();
+
+        if let Some(np) = new_np {
+            let duration = np.item.duration().as_secs_f64();
+
+            // Detect what kind of change this is
+            let track_changed = old_np
+                .as_ref()
+                .is_none_or(|old| old.item.id() != np.item.id());
+            let state_changed = old_np
+                .as_ref()
+                .is_none_or(|old| old.is_playing != np.is_playing);
+            let progress_changed = old_np
+                .as_ref()
+                .is_none_or(|old| old.progress != np.progress);
+            let was_seek = progress_changed && !track_changed && {
+                let diff = (np.progress.as_secs_f64() - self.backend_progress.as_secs_f64()).abs();
+                diff > 1.0
+            };
+
+            if track_changed {
+                // Full reset: new track
+                self.anchor_to(np.progress, np.is_playing);
+                self.snap_display(duration);
+                self.refresh_palette(np);
+            } else if was_seek || state_changed {
+                // Seek or pause/resume: re-anchor but let display ease
+                self.anchor_to(np.progress, np.is_playing);
+                if was_seek {
+                    self.snap_display(duration);
                 }
+            } else if progress_changed {
+                // Normal 500ms progress tick: just update backend reference.
+                // Do NOT reset anchor_time -- let the client clock keep running
+                // smoothly. The AnimFrame lerp will gently correct any drift.
+                self.backend_progress = np.progress;
+                // Nudge the base forward so the clock doesn't drift too far
+                let real = self.real_progress_secs(duration);
+                let backend = np.progress.as_secs_f64();
+                if (real - backend).abs() > 0.8 {
+                    // Drift is getting large -- soft re-anchor
+                    self.base_progress = np.progress;
+                    self.anchor_time = Instant::now();
+                }
+            }
+
+            if np.is_playing {
+                self.clock_running = true;
+                ctx.request_anim_frame();
             } else {
-                self.base_progress = Duration::ZERO;
-                self.last_tick = None;
+                self.clock_running = false;
             }
             ctx.request_paint();
-        } else if new_np.as_ref().is_some_and(|np| np.is_playing) {
-            ctx.request_anim_frame();
-        } else {
-            self.last_tick = None;
+        } else if old_np.is_some() {
+            // Playback stopped
+            self.base_progress = Duration::ZERO;
+            self.display_progress = 0.0;
+            self.clock_running = false;
+            self.current_track_id = None;
+            ctx.request_paint();
         }
-        // Repaint if the dynamic bar setting changed
+
         if old_data.config.dynamic_playing_bar != data.config.dynamic_playing_bar {
             ctx.request_paint();
         }
@@ -1352,17 +1460,19 @@ impl Widget<AppState> for SeekBar {
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &AppState, env: &Env) {
         let Some(np) = &data.playback.now_playing else {
-            // Nothing playing -- paint empty remaining bar
             let bounds = ctx.size();
             ctx.fill(bounds.to_rect(), &env.get(theme::GREY_600));
             return;
         };
 
-        let progress = self.current_progress(np);
+        // Use the smooth display progress, not the raw backend progress
+        let progress = Duration::from_secs_f64(
+            self.display_progress.clamp(0.0, np.item.duration().as_secs_f64()),
+        );
 
         if data.config.dynamic_playing_bar {
-            let pal = self.bar_palette(np).clone();
-            paint_dynamic_bar(ctx, np, &pal, progress, self.pulse_t);
+            // Palette is pre-computed in update(), just read it
+            paint_dynamic_bar(ctx, np, &self.bar_palette, progress, self.pulse_t);
         } else {
             paint_progress_bar(ctx, np, env, progress);
         }

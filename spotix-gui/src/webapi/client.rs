@@ -97,7 +97,6 @@ struct LibrespotState {
 }
 
 struct RateLimiter {
-    next_allowed: Instant,
     cooldown_until: Option<Instant>,
     cooldown_until_wall: Option<SystemTime>,
     consecutive_429: u32,
@@ -120,7 +119,6 @@ struct RequestPermit<'a> {
 impl RateLimiter {
     fn from_cache(cache: &WebApiCache) -> Self {
         let mut limiter = Self {
-            next_allowed: Instant::now(),
             cooldown_until: None,
             cooldown_until_wall: None,
             consecutive_429: 0,
@@ -172,7 +170,7 @@ impl WebApi {
             local_track_manager: Mutex::new(LocalTrackManager::new()),
             paginated_limit,
             rate_limiter: Mutex::new(rate_limiter),
-            request_gate: RequestGate::new(1),
+            request_gate: RequestGate::new(8),
             webapi_client_id,
         }
     }
@@ -427,40 +425,36 @@ impl WebApi {
     }
 
     fn wait_for_rate_limit(&self, _base_uri: &str) -> Result<(), Error> {
-        const MIN_API_INTERVAL: Duration = Duration::from_millis(200);
-        let mut delay = None;
-        {
+        let delay = {
             let mut limiter = self.rate_limiter.lock();
             let now = Instant::now();
+            // Check monotonic cooldown (set by register_429)
             if let Some(until) = limiter.cooldown_until {
                 if until > now {
-                    delay = Some(until - now);
+                    Some(until - now)
                 } else {
                     limiter.cooldown_until = None;
+                    None
                 }
             }
-            if delay.is_none()
-                && let Some(until_wall) = limiter.cooldown_until_wall
-            {
+            // Check wall-clock cooldown (persisted across restarts)
+            else if let Some(until_wall) = limiter.cooldown_until_wall {
                 if let Ok(remaining) = until_wall.duration_since(SystemTime::now()) {
-                    delay = Some(remaining);
+                    Some(remaining)
                 } else {
                     limiter.cooldown_until_wall = None;
+                    None
                 }
+            } else {
+                None
             }
-            if delay.is_none() {
-                if limiter.next_allowed <= now {
-                    limiter.next_allowed = now + MIN_API_INTERVAL;
-                } else {
-                    delay = Some(limiter.next_allowed - now);
-                    limiter.next_allowed += MIN_API_INTERVAL;
-                }
-            }
-        }
+        };
         if let Some(delay) = delay {
-            log::warn!("webapi: blocked by cooldown, retry in {}s", delay.as_secs());
+            log::warn!(
+                "webapi: blocked by 429 cooldown, retry in {:.1}s",
+                delay.as_secs_f64()
+            );
             thread::sleep(delay);
-            return Ok(());
         }
         Ok(())
     }
@@ -478,9 +472,6 @@ impl WebApi {
         delay_secs = delay_secs.min(MAX_DELAY_SECS);
         let delay = Duration::from_secs(delay_secs);
         let target = Instant::now() + delay;
-        if limiter.next_allowed < target {
-            limiter.next_allowed = target;
-        }
         limiter.cooldown_until = Some(target);
         let wall_target = SystemTime::now() + delay;
         limiter.cooldown_until_wall = Some(wall_target);

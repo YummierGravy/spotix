@@ -1,8 +1,3 @@
-# DEVELOPMENT WILL SOON BE CONTINUED
-Due to some drama with the Spotify API, development was discontinued for a while.
-Apperantly this issue has been solved, so there is still hope.
-This means: We are back baby!
-
 <div align="center">
   <img src="assets/logo.svg" alt="Spotix logo" width="96" height="96" />
   <h1>Spotix</h1>

@@ -65,6 +65,14 @@ If you hit rustc memory errors while building gtk:
 ulimit -d $(( 2 * `ulimit -d` ))
 ```
 
+### Install from source
+```shell
+cargo install --path spotix-gui
+# This installs the `spotix` binary to ~/.cargo/bin/.
+# On Linux, the app auto-installs its .desktop file and icons on first run,
+# so it will appear in your application launcher.
+```
+
 ### Build from source
 ```shell
 cargo build
@@ -73,7 +81,7 @@ cargo build
 
 ### Run from source
 ```shell
-cargo run --bin spotix-gui
+cargo run --bin spotix
 # Add --release for release builds.
 ```
 
@@ -159,8 +167,7 @@ status_text_color = "#bac2de"
 
 ## Project layout
 - `/spotix-core` core library (session, decoding, playback)
-- `/spotix-gui` GUI app (Druid)
-- `/spotix-cli` minimal CLI example
+- `/spotix-gui` GUI app (Druid) — binary name: `spotix`
 
 ## Privacy
 Spotix connects only to official Spotify servers.

@@ -36,6 +36,7 @@ use std::time::Duration;
 pub mod album;
 pub mod artist;
 pub mod credits;
+pub mod desktop;
 pub mod episode;
 pub mod find;
 pub mod home;

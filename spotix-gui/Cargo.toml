@@ -7,6 +7,10 @@ build = "build.rs"
 description = "Fast and native Spotify client"
 repository = "https://github.com/skyline69/spotix"
 
+[[bin]]
+name = "spotix"
+path = "src/main.rs"
+
 [features]
 default = ["cpal"]
 cpal = ["spotix-core/cpal"]

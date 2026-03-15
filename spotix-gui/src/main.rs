@@ -45,6 +45,7 @@ fn main() {
 
     ui::theme::configure_fontconfig();
     ui::theme::ensure_preset_themes();
+    ui::desktop::ensure_desktop_integration();
 
     let paginated_limit = config.paginated_limit;
     if config.oauth_token_clone().is_some() {

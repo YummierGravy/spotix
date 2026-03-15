@@ -114,8 +114,10 @@ impl Widget<PlaybackMarker> for PlaybackIndicator {
         if let Event::AnimFrame(interval) = event {
             if *data == PlaybackMarker::Playing {
                 self.t += (*interval as f64) * 1e-9;
-                if self.t >= 4.0 {
-                    self.t -= 4.0;
+                // Wrap at a large common period so the animation never visibly resets.
+                // LCM-friendly period for all three bar frequencies.
+                if self.t >= 60.0 {
+                    self.t -= 60.0;
                 }
                 ctx.request_anim_frame();
             }
@@ -177,13 +179,27 @@ impl Widget<PlaybackMarker> for PlaybackIndicator {
 
         let color = env.get(theme::BLUE_200);
 
+        // Each bar has its own frequency and phase for an organic feel.
+        // Using irrational-ish frequency ratios so they never align and
+        // the animation looks endlessly varied.
+        const BAR_PARAMS: [(f64, f64, f64); 3] = [
+            // (frequency_hz, phase_offset, secondary_blend)
+            (1.2, 0.0, 0.3),
+            (1.5, 2.1, 0.25),
+            (1.0, 4.3, 0.35),
+        ];
+
         for i in 0..3 {
             let x = x_offset + (i as f64) * (bar_width + gap);
 
             let bar_height = if *data == PlaybackMarker::Playing {
-                // Each bar has a different phase offset for a natural look
-                let phase = self.t * 1.8 + (i as f64) * 0.7;
-                let wave = ((phase * PI).sin() + 1.0) / 2.0;
+                let (freq, phase, blend) = BAR_PARAMS[i];
+                // Primary wave
+                let primary = ((self.t * freq * 2.0 * PI + phase).sin() + 1.0) / 2.0;
+                // Secondary harmonic at ~1.7x frequency for variation
+                let secondary =
+                    ((self.t * freq * 1.7 * 2.0 * PI + phase * 0.6).sin() + 1.0) / 2.0;
+                let wave = primary * (1.0 - blend) + secondary * blend;
                 min_height + wave * (max_height - min_height)
             } else {
                 // Paused: frozen short bars at different heights

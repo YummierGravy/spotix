@@ -27,8 +27,7 @@ use crate::{
 use librespot_protocol::authentication::AuthenticationType;
 use protobuf::{Enum, Message, MessageField, SpecialFields};
 
-// Device ID used for authentication message.
-const DEVICE_ID: &str = "Spotix";
+use crate::system_info::device_id;
 
 // URI of access-point resolve endpoint.
 const AP_RESOLVE_ENDPOINT: &str = "http://apresolve.spotify.com";
@@ -415,7 +414,7 @@ fn client_response_encrypted(credentials: Credentials) -> ShannonMsg {
             special_fields: SpecialFields::new(),
         }),
         system_info: MessageField::some(SystemInfo {
-            device_id: Some(DEVICE_ID.to_string()),
+            device_id: Some(device_id()),
             system_information_string: Some("librespot_but_actually_spotix".to_string()),
             os: Some(Os::default().into()),
             cpu_family: Some(CpuFamily::default().into()),

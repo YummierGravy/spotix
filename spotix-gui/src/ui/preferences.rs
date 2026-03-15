@@ -10,6 +10,7 @@ use crate::{
         AppState, AudioQuality, Authentication, CacheUsage, Config, EqBands, EqPreset, EqSettings,
         Preferences, PreferencesTab, Promise, SliderScrollScale, Theme,
     },
+    webapi::WebApi,
     widget::{Async, Border, Checkbox, MyWidgetExt, icons},
 };
 use druid::{
@@ -694,10 +695,16 @@ fn account_tab_widget(tab: AccountTab) -> impl Widget<AppState> {
             |data: &AppState, _| data.config.has_credentials(),
             |is_logged_in, _, _| {
                 if *is_logged_in {
-                    Button::new("Log Out")
-                        .on_left_click(|ctx, _, _, _| {
+                    Flex::row()
+                        .with_child(Button::new("Log Out").on_left_click(|ctx, _, _, _| {
                             ctx.submit_command(cmd::LOG_OUT);
-                        })
+                        }))
+                        .with_spacer(theme::grid(1.0))
+                        .with_child(Button::new("Re-authenticate (Web API)").on_click(
+                            |ctx, _data: &mut AppState, _| {
+                                ctx.submit_command(Authenticate::SPOTIFY_REQUEST);
+                            },
+                        ))
                         .boxed()
                 } else {
                     Button::new("Log in with Spotify")
@@ -907,16 +914,22 @@ impl Authenticate {
                 .map_err(|e| e.to_string())?;
 
                 // Exchange code for access token
-                let token = oauth::exchange_code_for_token(8888, code, pkce_verifier);
+                let token = oauth::exchange_code_for_token(8888, code, pkce_verifier)
+                    .map_err(|e| e.to_string())?;
 
                 // Try to authenticate with token, with retries
                 let mut retries = 3;
                 while retries > 0 {
                     match Authentication::authenticate_and_get_credentials(SessionConfig {
-                        login_creds: Credentials::from_access_token(token.clone()),
+                        login_creds: Credentials::from_access_token(token.access_token.clone()),
                         ..config.clone()
                     }) {
-                        Ok(credentials) => return Ok(credentials),
+                        Ok(credentials) => {
+                            return Ok(SpotifyAuthResult {
+                                credentials,
+                                oauth_token: token,
+                            });
+                        }
                         Err(e) if retries > 1 => {
                             log::warn!("authentication failed, retrying: {e:?}");
                             retries -= 1;
@@ -945,7 +958,7 @@ impl Authenticate {
 impl Authenticate {
     pub const SPOTIFY_REQUEST: Selector =
         Selector::new("app.preferences.spotify.authenticate-request");
-    pub const SPOTIFY_RESPONSE: Selector<Result<Credentials, String>> =
+    pub const SPOTIFY_RESPONSE: Selector<Result<SpotifyAuthResult, String>> =
         Selector::new("app.preferences.spotify.authenticate-response");
 
     // Selector for initializing fields
@@ -957,6 +970,11 @@ impl Authenticate {
         Selector::new("app.preferences.lastfm.authenticate-request");
     pub const LASTFM_RESPONSE: Selector<Result<String, String>> =
         Selector::new("app.preferences.lastfm.authenticate-response");
+}
+
+pub(crate) struct SpotifyAuthResult {
+    credentials: Credentials,
+    oauth_token: oauth::OAuthToken,
 }
 
 impl<W: Widget<AppState>> Controller<AppState, W> for Authenticate {
@@ -1039,14 +1057,18 @@ impl<W: Widget<AppState>> Controller<AppState, W> for Authenticate {
             Event::Command(cmd) if cmd.is(Self::SPOTIFY_RESPONSE) => {
                 let result = cmd.get_unchecked(Self::SPOTIFY_RESPONSE);
                 match result {
-                    Ok(credentials) => {
+                    Ok(payload) => {
                         // Update session config with the new credentials
                         data.session.update_config(SessionConfig {
-                            login_creds: credentials.clone(),
+                            login_creds: payload.credentials.clone(),
                             proxy_url: Config::proxy(),
                         });
-                        data.config.store_credentials(credentials.clone());
+                        data.config.store_credentials(payload.credentials.clone());
+                        data.config.store_oauth_token(payload.oauth_token.clone());
                         data.config.save();
+                        WebApi::global().set_oauth_token(payload.oauth_token.clone());
+                        WebApi::global().clear_rate_limit_state();
+                        ctx.submit_command(cmd::NAVIGATE_REFRESH);
                         data.preferences.auth.result.resolve((), ());
                         // Handle UI flow based on tab type
                         if matches!(self.tab, AccountTab::FirstSetup) {

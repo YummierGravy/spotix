@@ -124,11 +124,11 @@ impl RateLimiter {
             cooldown_until_wall: None,
             consecutive_429: 0,
         };
-        if let Some(until_wall) = WebApi::load_persisted_cooldown(cache) {
-            if let Ok(remaining) = until_wall.duration_since(SystemTime::now()) {
-                limiter.cooldown_until = Some(Instant::now() + remaining);
-                limiter.cooldown_until_wall = Some(until_wall);
-            }
+        if let Some(until_wall) = WebApi::load_persisted_cooldown(cache)
+            && let Ok(remaining) = until_wall.duration_since(SystemTime::now())
+        {
+            limiter.cooldown_until = Some(Instant::now() + remaining);
+            limiter.cooldown_until_wall = Some(until_wall);
         }
         limiter
     }
@@ -369,18 +369,18 @@ impl WebApi {
                 },
                 Err(RequestError::Auth(err)) => break Err(err),
                 Err(RequestError::Transport(err)) => {
-                    if let ureq::Error::StatusCode(code) = &err {
-                        if *code == 429 {
-                            let response_delay = self.register_429(None, MIN_429_DELAY);
-                            if attempts < MAX_ATTEMPTS {
-                                attempts += 1;
-                                continue;
-                            }
-                            break Err(Error::WebApiError(format!(
-                                "rate limited (HTTP 429), retry in {}s",
-                                response_delay.as_secs()
-                            )));
+                    if let ureq::Error::StatusCode(code) = &err
+                        && *code == 429
+                    {
+                        let response_delay = self.register_429(None, MIN_429_DELAY);
+                        if attempts < MAX_ATTEMPTS {
+                            attempts += 1;
+                            continue;
                         }
+                        break Err(Error::WebApiError(format!(
+                            "rate limited (HTTP 429), retry in {}s",
+                            response_delay.as_secs()
+                        )));
                     }
                     let should_retry = Self::is_retryable_error(&err);
                     if should_retry && attempts < MAX_ATTEMPTS {
@@ -427,13 +427,13 @@ impl WebApi {
                     limiter.cooldown_until = None;
                 }
             }
-            if delay.is_none() {
-                if let Some(until_wall) = limiter.cooldown_until_wall {
-                    if let Ok(remaining) = until_wall.duration_since(SystemTime::now()) {
-                        delay = Some(remaining);
-                    } else {
-                        limiter.cooldown_until_wall = None;
-                    }
+            if delay.is_none()
+                && let Some(until_wall) = limiter.cooldown_until_wall
+            {
+                if let Ok(remaining) = until_wall.duration_since(SystemTime::now()) {
+                    delay = Some(remaining);
+                } else {
+                    limiter.cooldown_until_wall = None;
                 }
             }
             if delay.is_none() {
@@ -755,20 +755,19 @@ impl WebApi {
                 Ok(value)
             }
             Err(err) => {
-                if let ClientError::Http(http_err) = &err {
-                    if let RSpotifyHttpError::StatusCode(resp) = http_err.as_ref() {
-                        if resp.status().as_u16() == 429 {
-                            let retry_after = resp
-                                .headers()
-                                .get("Retry-After")
-                                .and_then(|value| value.to_str().ok())
-                                .and_then(|value| value.parse::<u64>().ok())
-                                .map(Duration::from_secs);
-                            let delay = self.register_429(retry_after, MIN_429_DELAY);
-                            log::warn!("webapi: HTTP 429 cooldown {}s (rspotify)", delay.as_secs());
-                        }
+                if let ClientError::Http(http_err) = &err
+                    && let RSpotifyHttpError::StatusCode(resp) = http_err.as_ref()
+                    && resp.status().as_u16() == 429
+                {
+                    let retry_after = resp
+                        .headers()
+                        .get("Retry-After")
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .map(Duration::from_secs);
+                    let delay = self.register_429(retry_after, MIN_429_DELAY);
+                    log::warn!("webapi: HTTP 429 cooldown {}s (rspotify)", delay.as_secs());
                     }
-                }
                 Err(Error::WebApiError(err.to_string()))
             }
         }
@@ -862,7 +861,7 @@ impl WebApi {
         let group = album
             .album_group
             .as_deref()
-            .or_else(|| album.album_type.as_deref());
+            .or(album.album_type.as_deref());
         match group {
             Some("single") => AlbumType::Single,
             Some("compilation") => AlbumType::Compilation,
@@ -1363,17 +1362,16 @@ impl WebApi {
     pub fn rate_limit_delay(&self) -> Option<Duration> {
         let limiter = self.rate_limiter.lock();
         let now = Instant::now();
-        if let Some(until) = limiter.cooldown_until {
-            if until > now {
-                return Some(until - now);
-            }
+        if let Some(until) = limiter.cooldown_until
+            && until > now
+        {
+            return Some(until - now);
         }
-        if let Some(until_wall) = limiter.cooldown_until_wall {
-            if let Ok(remaining) = until_wall.duration_since(SystemTime::now()) {
-                if !remaining.is_zero() {
-                    return Some(remaining);
-                }
-            }
+        if let Some(until_wall) = limiter.cooldown_until_wall
+            && let Ok(remaining) = until_wall.duration_since(SystemTime::now())
+            && !remaining.is_zero()
+        {
+            return Some(remaining);
         }
         None
     }

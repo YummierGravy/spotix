@@ -34,12 +34,24 @@ fn main() {
     .init();
 
     // Load configuration
-    let config = Config::load().unwrap_or_default();
+    let mut config = Config::load().unwrap_or_default();
+    let device_id = config.ensure_device_id();
+    unsafe {
+        std::env::set_var("SPOTIX_DEVICE_ID", &device_id);
+    }
+    if config.device_id.as_deref() != Some(&device_id) {
+        config.save();
+    }
 
     ui::theme::configure_fontconfig();
     ui::theme::ensure_preset_themes();
 
     let paginated_limit = config.paginated_limit;
+    if config.oauth_token_clone().is_some() {
+        log::info!("webapi: oauth token loaded from config");
+    } else {
+        log::warn!("webapi: no oauth token in config (re-auth needed for webapi)");
+    }
     let mut state = AppState::default_with_config(config.clone());
 
     if let Some(cache_dir) = Config::cache_dir() {
@@ -57,9 +69,11 @@ fn main() {
         state.session.clone(),
         Config::proxy().as_deref(),
         Config::cache_dir(),
+        state.config.oauth_token_clone(),
         paginated_limit,
     )
     .install_as_global();
+    WebApi::global().clear_rate_limit_state();
 
     let delegate;
     let launcher;

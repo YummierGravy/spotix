@@ -1,9 +1,9 @@
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
-use serde::Deserialize;
 
 use crate::error::Error;
+use crate::system_info::device_id;
 
 use super::SessionService;
 
@@ -33,21 +33,35 @@ impl AccessToken {
     }
 
     pub fn request(session: &SessionService) -> Result<Self, Error> {
-        #[derive(Deserialize)]
-        struct MercuryAccessToken {
-            #[serde(rename = "expiresIn")]
-            expires_in: u64,
-            #[serde(rename = "accessToken")]
-            access_token: String,
-        }
-
-        let token: MercuryAccessToken = session.connected()?.get_mercury_json(format!(
-            "hm://keymaster/token/authenticated?client_id={CLIENT_ID}&scope={ACCESS_SCOPES}",
+        let payload = session.connected()?.get_mercury_bytes(format!(
+            "hm://keymaster/token/authenticated?client_id={CLIENT_ID}&scope={ACCESS_SCOPES}&device_id={}",
+            device_id()
         ))?;
+        let value: serde_json::Value = serde_json::from_slice(&payload)?;
+
+        let access_token = value
+            .get("accessToken")
+            .or_else(|| value.get("access_token"))
+            .and_then(|val| val.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                log::warn!("keymaster token response missing access token: {value}");
+                Error::UnexpectedResponse
+            })?;
+
+        let expires_in = value
+            .get("expiresIn")
+            .or_else(|| value.get("expires_in"))
+            .or_else(|| value.get("expires"))
+            .and_then(|val| val.as_u64())
+            .unwrap_or_else(|| {
+                log::warn!("keymaster token response missing expiresIn; defaulting to 3600s");
+                3600
+            });
 
         Ok(Self {
-            token: token.access_token,
-            expires: Instant::now() + Duration::from_secs(token.expires_in),
+            token: access_token,
+            expires: Instant::now() + Duration::from_secs(expires_in),
         })
     }
 

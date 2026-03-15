@@ -1,45 +1,67 @@
 use crate::{
     cmd,
-    data::{AppState, Nav, SpotifyUrl},
-    ui::{album, artist, library, lyrics, playlist, recommend, search, show},
+    data::{AppState, Nav, PromiseState, SpotifyUrl},
+    ui::{album, artist, home, library, lyrics, playlist, recommend, search, show},
 };
 use std::time::Duration;
 
-use druid::widget::{Controller, prelude::*};
+use druid::widget::{prelude::*, Controller};
 use druid::{Code, Target, TimerToken};
 
 #[derive(Default)]
 pub struct NavController {
     scroll_timer: Option<TimerToken>,
+    rate_limit_timer: Option<TimerToken>,
 }
 
 impl NavController {
-    fn load_route_data(&self, ctx: &mut EventCtx, data: &mut AppState) {
+    fn load_route_data(&mut self, ctx: &mut EventCtx, data: &mut AppState) {
+        let _ = matches!(
+            &data.nav,
+            Nav::Home
+                | Nav::SavedTracks
+                | Nav::SavedAlbums
+                | Nav::Shows
+                | Nav::SearchResults(_)
+                | Nav::AlbumDetail(_, _)
+                | Nav::ArtistDetail(_)
+                | Nav::PlaylistDetail(_)
+                | Nav::ShowDetail(_)
+                | Nav::Recommendations(_)
+        );
         match &data.nav {
-            Nav::Home => {}
+            Nav::Home => {
+                if data.home_detail.made_for_you.state() == PromiseState::Empty {
+                    ctx.submit_command(home::LOAD_MADE_FOR_YOU);
+                }
+                if data.home_detail.user_top_artists.state() == PromiseState::Empty {
+                    ctx.submit_command(home::LOAD_USER_TOP_ARTISTS);
+                }
+                if data.home_detail.user_top_tracks.state() == PromiseState::Empty {
+                    ctx.submit_command(home::LOAD_USER_TOP_TRACKS);
+                }
+            }
             Nav::Lyrics => {}
             Nav::SavedTracks => {
-                if !data.library.saved_tracks.is_resolved() {
+                if data.library.saved_tracks.state() == PromiseState::Empty {
                     ctx.submit_command(library::LOAD_TRACKS);
                 }
             }
             Nav::SavedAlbums => {
-                if !data.library.saved_albums.is_resolved() {
+                if data.library.saved_albums.state() == PromiseState::Empty {
                     ctx.submit_command(library::LOAD_ALBUMS);
                 }
             }
             Nav::Shows => {
-                if !data.library.saved_shows.is_resolved() {
+                if data.library.saved_shows.state() == PromiseState::Empty {
                     ctx.submit_command(library::LOAD_SHOWS);
                 }
             }
             Nav::SearchResults(query) => {
                 if let Some(link) = SpotifyUrl::parse(query) {
                     ctx.submit_command(search::OPEN_LINK.with(link));
-                } else if !data
-                    .search
-                    .results
-                    .contains(&(query.clone(), data.search.topic))
+                } else if data.search.results.deferred()
+                    != Some(&(query.clone(), data.search.topic))
                 {
                     ctx.submit_command(
                         search::LOAD_RESULTS.with((query.to_owned(), data.search.topic)),
@@ -47,17 +69,17 @@ impl NavController {
                 }
             }
             Nav::AlbumDetail(link, _) => {
-                if !data.album_detail.album.contains(link) {
+                if data.album_detail.album.deferred() != Some(link) {
                     ctx.submit_command(album::LOAD_DETAIL.with(link.to_owned()));
                 }
             }
             Nav::ArtistDetail(link) => {
-                if !data.artist_detail.top_tracks.contains(link) {
+                if data.artist_detail.top_tracks.deferred() != Some(link) {
                     ctx.submit_command(artist::LOAD_DETAIL.with(link.to_owned()));
                 }
             }
             Nav::PlaylistDetail(link) => {
-                if !data.playlist_detail.playlist.contains(link) {
+                if data.playlist_detail.playlist.deferred() != Some(link) {
                     ctx.submit_command(playlist::LOAD_DETAIL.with((
                         link.to_owned(),
                         data.config.sort_criteria,
@@ -67,12 +89,12 @@ impl NavController {
                 }
             }
             Nav::ShowDetail(link) => {
-                if !data.show_detail.show.contains(link) {
+                if data.show_detail.show.deferred() != Some(link) {
                     ctx.submit_command(show::LOAD_DETAIL.with(link.to_owned()));
                 }
             }
             Nav::Recommendations(request) => {
-                if !data.recommend.results.contains(request) {
+                if data.recommend.results.deferred() != Some(request) {
                     ctx.submit_command(recommend::LOAD_RESULTS.with(request.clone()));
                 }
             }
@@ -96,6 +118,11 @@ where
             Event::Timer(token) if self.scroll_timer == Some(*token) => {
                 self.scroll_timer = None;
                 ctx.submit_command(lyrics::SCROLL_ACTIVE_LYRIC.to(Target::Window(ctx.window_id())));
+                ctx.set_handled();
+            }
+            Event::Timer(token) if self.rate_limit_timer == Some(*token) => {
+                self.rate_limit_timer = None;
+                self.load_route_data(ctx, data);
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::NAVIGATE) => {
@@ -156,8 +183,6 @@ where
         env: &Env,
     ) {
         if let LifeCycle::WidgetAdded = event {
-            // Loads the library's saved tracks without the user needing to click on the tab.
-            ctx.submit_command(cmd::NAVIGATE.with(Nav::SavedTracks));
             // Load the last route, or the default.
             ctx.submit_command(
                 cmd::NAVIGATE.with(data.config.last_route.to_owned().unwrap_or_default()),

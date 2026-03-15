@@ -1,15 +1,16 @@
 use crate::error::Error;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, CsrfToken, EndpointNotSet, EndpointSet,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
     basic::BasicClient, reqwest,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     io::{BufRead, BufReader, Write},
     net::TcpStream,
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener},
     sync::mpsc,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use url::Url;
 
@@ -147,6 +148,27 @@ pub fn send_success_response(stream: &mut TcpStream) {
     let _ = stream.write_all(response.as_bytes());
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OAuthToken {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_at_unix: Option<u64>,
+}
+
+impl OAuthToken {
+    pub fn is_expired(&self, buffer: Duration) -> bool {
+        let Some(expires_at_unix) = self.expires_at_unix else {
+            return false;
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default();
+        let buffer_secs = buffer.as_secs();
+        expires_at_unix <= now.saturating_add(buffer_secs)
+    }
+}
+
 fn create_spotify_oauth_client(
     redirect_port: u16,
 ) -> BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet> {
@@ -167,6 +189,23 @@ fn create_spotify_oauth_client(
     .set_redirect_uri(RedirectUrl::new(redirect_uri).expect("Invalid redirect URL"))
 }
 
+fn build_oauth_token(
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_in: Option<Duration>,
+) -> OAuthToken {
+    let expires_at_unix = expires_in
+        .and_then(|expires_in| SystemTime::now().checked_add(expires_in))
+        .and_then(|expires_at| expires_at.duration_since(UNIX_EPOCH).ok())
+        .map(|expires_at| expires_at.as_secs());
+
+    OAuthToken {
+        access_token,
+        refresh_token,
+        expires_at_unix,
+    }
+}
+
 pub fn generate_auth_url(redirect_port: u16) -> (String, PkceCodeVerifier) {
     let client = create_spotify_oauth_client(redirect_port);
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -184,21 +223,55 @@ pub fn exchange_code_for_token(
     redirect_port: u16,
     code: AuthorizationCode,
     pkce_verifier: PkceCodeVerifier,
-) -> String {
+) -> Result<OAuthToken, Error> {
     let client = create_spotify_oauth_client(redirect_port);
 
     let http_client = reqwest::blocking::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .expect("Failed to build HTTP client");
+        .map_err(|err| Error::OAuthError(format!("Failed to build HTTP client: {err}")))?;
 
     let token_response = client
         .exchange_code(code)
         .set_pkce_verifier(pkce_verifier)
         .request(&http_client)
-        .expect("Failed to exchange code for token");
+        .map_err(|err| Error::OAuthError(format!("Failed to exchange code: {err}")))?;
 
-    token_response.access_token().secret().to_string()
+    let access_token = token_response.access_token().secret().to_string();
+    let refresh_token = token_response
+        .refresh_token()
+        .map(|token| token.secret().to_string());
+
+    Ok(build_oauth_token(
+        access_token,
+        refresh_token,
+        token_response.expires_in(),
+    ))
+}
+
+pub fn refresh_access_token(refresh_token: &str) -> Result<OAuthToken, Error> {
+    let client = create_spotify_oauth_client(8888);
+    let http_client = reqwest::blocking::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|err| Error::OAuthError(format!("Failed to build HTTP client: {err}")))?;
+
+    let token_response = client
+        .exchange_refresh_token(&RefreshToken::new(refresh_token.to_string()))
+        .request(&http_client)
+        .map_err(|err| Error::OAuthError(format!("Failed to refresh token: {err}")))?;
+
+    let access_token = token_response.access_token().secret().to_string();
+    let refresh = token_response
+        .refresh_token()
+        .map(|token| token.secret().to_string())
+        .or_else(|| Some(refresh_token.to_string()));
+
+    Ok(build_oauth_token(
+        access_token,
+        refresh,
+        token_response.expires_in(),
+    ))
 }
 
 fn get_scopes() -> Vec<Scope> {

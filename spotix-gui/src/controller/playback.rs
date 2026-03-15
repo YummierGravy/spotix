@@ -111,6 +111,7 @@ impl PlaybackController {
         &mut self,
         session: SessionService,
         config: PlaybackConfig,
+        creds: Option<spotix_core::connection::Credentials>,
         event_sink: ExtEventSink,
         widget_id: WidgetId,
         #[allow(unused_variables)] window: &WindowHandle,
@@ -124,6 +125,7 @@ impl PlaybackController {
             Cache::new(cache_dir).unwrap(),
             config,
             &output,
+            creds,
         );
 
         self.media_controls = Self::create_media_controls(player.sender(), window)
@@ -1406,6 +1408,7 @@ where
                 self.open_audio_output_and_start_threads(
                     data.session.clone(),
                     data.config.playback(),
+                    data.config.credentials_clone(),
                     ctx.get_external_handle(),
                     ctx.widget_id(),
                     ctx.window(),

@@ -35,6 +35,9 @@ pub fn input_widget() -> impl Widget<AppState> {
             if query.trim().is_empty() {
                 return;
             }
+            if WebApi::global().is_rate_limited() {
+                return;
+            }
             ctx.submit_command(cmd::NAVIGATE.with(Nav::SearchResults(query.clone().into())));
             query.clear();
         }))

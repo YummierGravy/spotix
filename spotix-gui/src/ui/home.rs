@@ -21,7 +21,16 @@ use super::{
     utils::{retry_error_widget, spinner_widget},
 };
 
-pub const LOAD_MADE_FOR_YOU: Selector = Selector::new("app.home.load-made-for-your");
+pub const LOAD_MADE_FOR_YOU: Selector = Selector::new("app.home.load-made-for-you");
+pub const LOAD_JUMP_BACK_IN: Selector = Selector::new("app.home.load-jump-back-in");
+pub const LOAD_RECOMMENDED_STATIONS: Selector = Selector::new("app.home.load-recommended-stations");
+pub const LOAD_UNIQUELY_YOURS: Selector = Selector::new("app.home.load-uniquely-yours");
+pub const LOAD_USER_TOP_MIXES: Selector = Selector::new("app.home.load-user-top-mixes");
+pub const LOAD_BEST_OF_ARTISTS: Selector = Selector::new("app.home.load-best-of-artists");
+pub const LOAD_YOUR_SHOWS: Selector = Selector::new("app.home.load-your-shows");
+pub const LOAD_SHOWS_YOU_MIGHT_LIKE: Selector = Selector::new("app.home.load-shows-you-might-like");
+pub const LOAD_USER_TOP_ARTISTS: Selector = Selector::new("app.home.load-user-top-artists");
+pub const LOAD_USER_TOP_TRACKS: Selector = Selector::new("app.home.load-user-top-tracks");
 
 pub fn home_widget() -> impl Widget<AppState> {
     Flex::column()
@@ -75,7 +84,7 @@ fn recommended_stations() -> impl Widget<AppState> {
             .then(Ctx::in_promise()),
         )
         .on_command_async(
-            LOAD_MADE_FOR_YOU,
+            LOAD_RECOMMENDED_STATIONS,
             |_| WebApi::global().recommended_stations(),
             |_, data, q| data.home_detail.recommended_stations.defer(q),
             |_, data, r| data.home_detail.recommended_stations.update(r),
@@ -110,7 +119,7 @@ fn uniquely_yours() -> impl Widget<AppState> {
             .then(Ctx::in_promise()),
         )
         .on_command_async(
-            LOAD_MADE_FOR_YOU,
+            LOAD_UNIQUELY_YOURS,
             |_| WebApi::global().uniquely_yours(),
             |_, data, q| data.home_detail.uniquely_yours.defer(q),
             |_, data, r| data.home_detail.uniquely_yours.update(r),
@@ -127,7 +136,7 @@ fn user_top_mixes() -> impl Widget<AppState> {
             .then(Ctx::in_promise()),
         )
         .on_command_async(
-            LOAD_MADE_FOR_YOU,
+            LOAD_USER_TOP_MIXES,
             |_| WebApi::global().get_top_mixes(),
             |_, data, q| data.home_detail.user_top_mixes.defer(q),
             |_, data, r| data.home_detail.user_top_mixes.update(r),
@@ -144,7 +153,7 @@ fn best_of_artists() -> impl Widget<AppState> {
             .then(Ctx::in_promise()),
         )
         .on_command_async(
-            LOAD_MADE_FOR_YOU,
+            LOAD_BEST_OF_ARTISTS,
             |_| WebApi::global().best_of_artists(),
             |_, data, q| data.home_detail.best_of_artists.defer(q),
             |_, data, r| data.home_detail.best_of_artists.update(r),
@@ -161,7 +170,7 @@ pub fn your_shows() -> impl Widget<AppState> {
             .then(Ctx::in_promise()),
         )
         .on_command_async(
-            LOAD_MADE_FOR_YOU,
+            LOAD_YOUR_SHOWS,
             |_| WebApi::global().your_shows(),
             |_, data, q| data.home_detail.your_shows.defer(q),
             |_, data, r| data.home_detail.your_shows.update(r),
@@ -235,7 +244,7 @@ fn jump_back_in() -> impl Widget<AppState> {
             .then(Ctx::in_promise()),
         )
         .on_command_async(
-            LOAD_MADE_FOR_YOU,
+            LOAD_JUMP_BACK_IN,
             |_| WebApi::global().jump_back_in(),
             |_, data, q| data.home_detail.jump_back_in.defer(q),
             |_, data, r| data.home_detail.jump_back_in.update(r),
@@ -252,7 +261,7 @@ pub fn shows_that_you_might_like() -> impl Widget<AppState> {
             .then(Ctx::in_promise()),
         )
         .on_command_async(
-            LOAD_MADE_FOR_YOU,
+            LOAD_SHOWS_YOU_MIGHT_LIKE,
             |_| WebApi::global().shows_that_you_might_like(),
             |_, data, q| data.home_detail.shows_that_you_might_like.defer(q),
             |_, data, r| data.home_detail.shows_that_you_might_like.update(r),
@@ -351,11 +360,11 @@ fn user_top_artists_widget() -> impl Widget<AppState> {
     Async::new(
         spinner_widget,
         || Scroll::new(List::new(|| artist::artist_widget(true)).horizontal()).horizontal(),
-        || retry_error_widget(LOAD_MADE_FOR_YOU),
+        || retry_error_widget(LOAD_USER_TOP_ARTISTS),
     )
     .lens(AppState::home_detail.then(HomeDetail::user_top_artists))
     .on_command_async(
-        LOAD_MADE_FOR_YOU,
+        LOAD_USER_TOP_ARTISTS,
         |_| WebApi::global().get_user_top_artist(),
         |_, data, d| data.home_detail.user_top_artists.defer(d),
         |_, data, r| data.home_detail.user_top_artists.update(r),
@@ -376,7 +385,7 @@ fn top_tracks_widget() -> impl Widget<WithCtx<Vector<Arc<Track>>>> {
 
 fn user_top_tracks_widget() -> impl Widget<AppState> {
     Async::new(spinner_widget, top_tracks_widget, || {
-        retry_error_widget(LOAD_MADE_FOR_YOU)
+        retry_error_widget(LOAD_USER_TOP_TRACKS)
     })
     .lens(
         Ctx::make(
@@ -386,7 +395,7 @@ fn user_top_tracks_widget() -> impl Widget<AppState> {
         .then(Ctx::in_promise()),
     )
     .on_command_async(
-        LOAD_MADE_FOR_YOU,
+        LOAD_USER_TOP_TRACKS,
         |_| WebApi::global().get_user_top_tracks(),
         |_, data, d| data.home_detail.user_top_tracks.defer(d),
         |_, data, r| data.home_detail.user_top_tracks.update(r),

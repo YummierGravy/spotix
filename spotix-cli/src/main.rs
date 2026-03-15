@@ -73,7 +73,7 @@ fn play_item(
     let output = DefaultAudioOutput::open()?;
     let config = PlaybackConfig::default();
 
-    let mut player = Player::new(session, cdn, cache, config, &output);
+    let mut player = Player::new(session, cdn, cache, config, &output, None);
 
     let _ui_thread = thread::spawn({
         let player_sender = player.sender();

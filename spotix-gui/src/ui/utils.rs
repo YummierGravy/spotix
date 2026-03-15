@@ -193,6 +193,9 @@ pub fn retry_error_widget<D: Data + Clone>(
 ) -> impl Widget<PromiseError<Error, D>> {
     let retry = Label::new("Retry").link().on_left_click(
         move |ctx, _, data: &mut PromiseError<Error, D>, _| {
+            if crate::webapi::WebApi::global().is_rate_limited() {
+                return;
+            }
             ctx.submit_command(selector.with(data.def.clone()));
         },
     );

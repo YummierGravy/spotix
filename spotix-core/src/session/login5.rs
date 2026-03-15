@@ -4,7 +4,7 @@ use crate::error::Error;
 use crate::session::SessionService;
 use crate::session::client_token::ClientTokenProvider;
 use crate::session::token::Token;
-use crate::system_info::{CLIENT_ID, DEVICE_ID};
+use crate::system_info::{CLIENT_ID, device_id};
 use crate::util::{default_ureq_agent_builder, solve_hash_cash};
 use librespot_protocol::login5::login_response::Response;
 use librespot_protocol::{
@@ -122,7 +122,7 @@ impl Login5 {
         let mut login_request = LoginRequest {
             client_info: MessageField::some(ClientInfo {
                 client_id: String::from(CLIENT_ID),
-                device_id: String::from(DEVICE_ID),
+                device_id: device_id(),
                 special_fields: Default::default(),
             }),
             login_method: Some(login),

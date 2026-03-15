@@ -1,21 +1,16 @@
 use druid::widget::{Controller, prelude::*};
 
-use crate::{
-    cmd,
-    data::AppState,
-    ui::{home, playlist, user},
-};
+use crate::{cmd, data::AppState, ui::user};
 
-pub struct SessionController;
+#[derive(Default)]
+pub struct SessionController {}
 
 impl SessionController {
-    fn connect(&self, ctx: &mut EventCtx, data: &mut AppState) {
+    fn connect(&mut self, ctx: &mut EventCtx, data: &mut AppState) {
         // Update the session configuration, any active session will get shut down.
         data.session.update_config(data.config.session());
 
-        // Reload the global, usually visible data.
-        ctx.submit_command(playlist::LOAD_LIST);
-        ctx.submit_command(home::LOAD_MADE_FOR_YOU);
+        // Reload minimal global data. Avoid heavy auto-loads that can trigger 429s.
         ctx.submit_command(user::LOAD_PROFILE);
     }
 }

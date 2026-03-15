@@ -1,6 +1,8 @@
 use std::{
+    io,
     io::Read,
     sync::Arc,
+    thread,
     time::{Duration, Instant},
 };
 
@@ -8,8 +10,13 @@ use serde::Deserialize;
 
 use crate::session::login5::Login5;
 use crate::{
-    error::Error, item_id::FileId, session::SessionService, util::default_ureq_agent_builder,
+    error::Error,
+    item_id::FileId,
+    session::{client_token::ClientTokenProvider, SessionService},
+    system_info::{OS, SPOTIFY_SEMANTIC_VERSION},
+    util::default_ureq_agent_builder,
 };
+use ureq::http::StatusCode;
 
 pub type CdnHandle = Arc<Cdn>;
 
@@ -17,36 +24,124 @@ pub struct Cdn {
     session: SessionService,
     agent: ureq::Agent,
     login5: Login5,
+    client_token_provider: ClientTokenProvider,
 }
 
 impl Cdn {
     pub fn new(session: SessionService, proxy_url: Option<&str>) -> Result<CdnHandle, Error> {
-        let agent = default_ureq_agent_builder(proxy_url).build();
+        let agent = default_ureq_agent_builder(proxy_url)
+            .http_status_as_error(false)
+            .build();
         Ok(Arc::new(Self {
             session,
             agent: agent.into(),
             login5: Login5::new(None, proxy_url),
+            client_token_provider: ClientTokenProvider::new(proxy_url),
         }))
     }
 
     pub fn resolve_audio_file_url(&self, id: FileId) -> Result<CdnUrl, Error> {
+        const MAX_ATTEMPTS: u8 = 5;
+        const BASE_BACKOFF: Duration = Duration::from_millis(500);
+        const MAX_BACKOFF: Duration = Duration::from_secs(10);
+
         let locations_uri = format!(
             "https://api.spotify.com/v1/storage-resolve/files/audio/interactive/{}",
             id.to_base16()
         );
+
         let access_token = self.login5.get_access_token(&self.session)?;
-        let response = self
-            .agent
-            .get(&locations_uri)
-            .query("version", "10000000")
-            .query("product", "9")
-            .query("platform", "39")
-            .query("alt", "json")
-            .header(
-                "Authorization",
-                &format!("Bearer {}", access_token.access_token),
-            )
-            .call()?;
+        let mut attempts = 0;
+        let mut backoff = BASE_BACKOFF;
+
+        let response = loop {
+            let mut request = self
+                .agent
+                .get(&locations_uri)
+                .query("version", "10000000")
+                .query("product", "9")
+                .query("platform", "39")
+                .query("alt", "json")
+                .header(
+                    "Authorization",
+                    &format!("Bearer {}", access_token.access_token),
+                )
+                .header("User-Agent", &Self::user_agent());
+
+            match self.client_token_provider.get() {
+                Ok(client_token) => {
+                    request = request.header("client-token", &client_token);
+                }
+                Err(err) => {
+                    log::warn!("cdn: failed to get client token: {err}");
+                }
+            }
+
+            let response = request.call();
+            let response = match response {
+                Ok(resp) => resp,
+                Err(err) => {
+                    return Err(Error::AudioFetchingError(Box::new(err)));
+                }
+            };
+
+            match response.status() {
+                StatusCode::TOO_MANY_REQUESTS => {
+                    let retry_after = response
+                        .headers()
+                        .get("Retry-After")
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .map(Duration::from_secs);
+                    let delay = retry_after.unwrap_or(backoff);
+                    log::warn!(
+                        "cdn: rate limited (HTTP 429), retrying in {}s",
+                        delay.as_secs()
+                    );
+                    if attempts < MAX_ATTEMPTS {
+                        thread::sleep(delay);
+                        attempts += 1;
+                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                        continue;
+                    }
+                    return Err(Error::AudioFetchingError(Box::new(io::Error::other(
+                        format!(
+                            "storage-resolve rate limited (HTTP 429), retry in {}s",
+                            delay.as_secs()
+                        ),
+                    ))));
+                }
+                StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT => {
+                    if attempts < MAX_ATTEMPTS {
+                        thread::sleep(backoff);
+                        attempts += 1;
+                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                        continue;
+                    }
+                    return Err(Error::AudioFetchingError(Box::new(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "storage-resolve timed out",
+                    ))));
+                }
+                status if status.is_server_error() => {
+                    if attempts < MAX_ATTEMPTS {
+                        thread::sleep(backoff);
+                        attempts += 1;
+                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                        continue;
+                    }
+                    return Err(Error::AudioFetchingError(Box::new(io::Error::other(
+                        format!("storage-resolve server error: {}", status.as_u16()),
+                    ))));
+                }
+                status if status.is_client_error() => {
+                    return Err(Error::AudioFetchingError(Box::new(io::Error::other(
+                        format!("storage-resolve error: {}", status.as_u16()),
+                    ))));
+                }
+                _ => break response,
+            }
+        };
 
         #[derive(Deserialize)]
         struct AudioFileLocations {
@@ -110,6 +205,22 @@ impl CdnUrl {
 
     pub fn is_expired(&self) -> bool {
         self.expires.saturating_duration_since(Instant::now()) < Self::EXPIRATION_TIME_THRESHOLD
+    }
+}
+
+impl Cdn {
+    fn user_agent() -> String {
+        let platform = match OS {
+            "macos" => "OSX",
+            "windows" => "Win32",
+            _ => "Linux",
+        };
+        format!(
+            "Spotify/{} {}/0 (spotix/{})",
+            SPOTIFY_SEMANTIC_VERSION,
+            platform,
+            env!("CARGO_PKG_VERSION")
+        )
     }
 }
 

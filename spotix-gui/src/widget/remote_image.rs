@@ -1,9 +1,11 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use druid::{
-    Data, ImageBuf, Point, Selector, WidgetPod,
+    Data, ImageBuf, Point, Selector, TimerToken, WidgetPod,
     widget::{FillStrat, Image, prelude::*},
 };
+
+use crate::webapi::WebApi;
 
 pub const REQUEST_DATA: Selector<Arc<str>> = Selector::new("remote-image.request-data");
 pub const PROVIDE_DATA: Selector<ImagePayload> = Selector::new("remote-image.provide-data");
@@ -19,6 +21,8 @@ pub struct RemoteImage<T> {
     image: Option<WidgetPod<T, Image>>,
     locator: Box<dyn Fn(&T, &Env) -> Option<Arc<str>>>,
     location: Option<Arc<str>>,
+    request_timer: Option<TimerToken>,
+    pending_request: Option<Arc<str>>,
 }
 
 impl<T: Data> RemoteImage<T> {
@@ -31,6 +35,8 @@ impl<T: Data> RemoteImage<T> {
             locator: Box::new(locator),
             location: None,
             image: None,
+            request_timer: None,
+            pending_request: None,
         }
     }
 }
@@ -48,6 +54,21 @@ impl<T: Data> Widget<T> for RemoteImage<T> {
             }
             return;
         }
+        if let Event::Timer(token) = event
+            && self.request_timer == Some(*token)
+        {
+            self.request_timer = None;
+            if let Some(delay) = WebApi::global().rate_limit_delay() {
+                self.request_timer = Some(ctx.request_timer(delay));
+                return;
+            }
+            if let Some(location) = self.pending_request.take()
+                && Some(&location) == self.location.as_ref()
+            {
+                ctx.submit_command(REQUEST_DATA.with(location).to(ctx.widget_id()));
+            }
+            return;
+        }
         if let Some(image) = self.image.as_mut() {
             image.event(ctx, event, data, env);
         } else {
@@ -60,8 +81,12 @@ impl<T: Data> Widget<T> for RemoteImage<T> {
             let location = (self.locator)(data, env);
             self.image = None;
             self.location.clone_from(&location);
-            if let Some(location) = location {
-                ctx.submit_command(REQUEST_DATA.with(location).to(ctx.widget_id()));
+            self.pending_request = location;
+            if self.pending_request.is_some() {
+                let delay = WebApi::global()
+                    .rate_limit_delay()
+                    .unwrap_or(Duration::from_millis(250));
+                self.request_timer = Some(ctx.request_timer(delay));
             }
         }
         if let Some(image) = self.image.as_mut() {
@@ -76,10 +101,22 @@ impl<T: Data> Widget<T> for RemoteImage<T> {
         if location != self.location {
             self.image = None;
             self.location.clone_from(&location);
-            if let Some(location) = location {
-                ctx.submit_command(REQUEST_DATA.with(location).to(ctx.widget_id()));
+            self.pending_request = location;
+            if self.pending_request.is_some() {
+                let delay = WebApi::global()
+                    .rate_limit_delay()
+                    .unwrap_or(Duration::from_millis(250));
+                self.request_timer = Some(ctx.request_timer(delay));
+            } else {
+                self.request_timer = None;
             }
             ctx.children_changed();
+        }
+        if self.request_timer.is_none() && self.pending_request.is_some() {
+            let delay = WebApi::global()
+                .rate_limit_delay()
+                .unwrap_or(Duration::from_millis(250));
+            self.request_timer = Some(ctx.request_timer(delay));
         }
         if let Some(image) = self.image.as_mut() {
             image.update(ctx, data, env);

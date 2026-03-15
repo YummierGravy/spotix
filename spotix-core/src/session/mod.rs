@@ -77,6 +77,13 @@ impl SessionService {
         self.shutdown();
     }
 
+    pub fn credentials(&self) -> Option<Credentials> {
+        self.config
+            .lock()
+            .as_ref()
+            .map(|config| config.login_creds.clone())
+    }
+
     /// Returns true if a session worker is actively servicing the connected
     /// session.  We return false here after any case of I/O errors or an
     /// explicit session shutdown.

@@ -1,9 +1,8 @@
+use crate::cmd;
 use druid::{
     HotKey, KbKey, SysMods, commands,
     widget::{Controller, TextBox, prelude::*},
 };
-
-use crate::cmd;
 
 type SubmitHandler = Box<dyn Fn(&mut EventCtx, &mut String, &Env)>;
 
@@ -68,5 +67,16 @@ impl Controller<String, TextBox<String>> for InputController {
                 child.event(ctx, event, data, env);
             }
         }
+    }
+
+    fn update(
+        &mut self,
+        child: &mut TextBox<String>,
+        ctx: &mut UpdateCtx,
+        old_data: &String,
+        data: &String,
+        env: &Env,
+    ) {
+        child.update(ctx, old_data, data, env);
     }
 }

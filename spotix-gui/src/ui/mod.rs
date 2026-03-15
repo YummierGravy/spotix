@@ -281,7 +281,7 @@ fn root_widget() -> impl Widget<AppState> {
         .solid_bar(true);
 
     ThemeScope::new(split)
-        .controller(SessionController)
+        .controller(SessionController::default())
         .controller(NavController::default())
         .controller(SortController)
         .on_command_async(

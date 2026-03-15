@@ -1,5 +1,6 @@
 pub mod file;
 pub mod item;
+mod librespot;
 pub mod queue;
 mod storage;
 mod worker;
@@ -15,6 +16,7 @@ use crate::{
     },
     cache::CacheHandle,
     cdn::CdnHandle,
+    connection::Credentials,
     error::Error,
     session::SessionService,
 };
@@ -22,6 +24,7 @@ use crate::{
 use self::{
     file::MediaPath,
     item::{LoadedPlaybackItem, PlaybackItem},
+    librespot::LibrespotBackend,
     queue::{Queue, QueueBehavior},
     worker::PlaybackManager,
 };
@@ -37,6 +40,8 @@ pub struct PlaybackConfig {
     pub crossfade_duration: Duration,
     pub mono_audio: bool,
     pub eq: EqConfig,
+    pub normalization_enabled: bool,
+    pub engine: PlaybackEngine,
 }
 
 impl Default for PlaybackConfig {
@@ -48,8 +53,16 @@ impl Default for PlaybackConfig {
             crossfade_duration: Duration::from_secs(0),
             mono_audio: false,
             eq: EqConfig::default(),
+            normalization_enabled: true,
+            engine: PlaybackEngine::Librespot,
         }
     }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum PlaybackEngine {
+    Native,
+    Librespot,
 }
 
 pub struct Player {
@@ -66,6 +79,7 @@ pub struct Player {
     playback_mgr: PlaybackManager,
     consecutive_loading_failures: usize,
     ignore_end_of_track: bool,
+    librespot: Option<LibrespotBackend>,
 }
 
 impl Player {
@@ -75,8 +89,34 @@ impl Player {
         cache: CacheHandle,
         config: PlaybackConfig,
         audio_output: &DefaultAudioOutput,
+        librespot_creds: Option<Credentials>,
     ) -> Self {
         let (sender, receiver) = unbounded();
+        let librespot = match config.engine {
+            PlaybackEngine::Librespot => match session.credentials() {
+                Some(creds) => LibrespotBackend::new(&config, &creds, sender.clone())
+                    .map_err(|err| {
+                        log::error!("librespot backend init failed: {err}");
+                        err
+                    })
+                    .ok(),
+                None => {
+                    let creds = librespot_creds;
+                    if let Some(creds) = creds {
+                        LibrespotBackend::new(&config, &creds, sender.clone())
+                            .map_err(|err| {
+                                log::error!("librespot backend init failed: {err}");
+                                err
+                            })
+                            .ok()
+                    } else {
+                        log::error!("librespot backend init failed: missing credentials");
+                        None
+                    }
+                }
+            },
+            PlaybackEngine::Native => None,
+        };
         Self {
             playback_mgr: PlaybackManager::new(audio_output.sink(), sender.clone()),
             session,
@@ -91,6 +131,7 @@ impl Player {
             queue: Queue::new(),
             consecutive_loading_failures: 0,
             ignore_end_of_track: false,
+            librespot,
         }
     }
 
@@ -103,6 +144,30 @@ impl Player {
     }
 
     pub fn handle(&mut self, event: PlayerEvent) {
+        if self.librespot.is_some() {
+            match event {
+                PlayerEvent::Command(cmd) => self.handle_command(cmd),
+                PlayerEvent::EndOfTrack => self.handle_end_of_track_librespot(),
+                PlayerEvent::Playing { path, position } => {
+                    self.state = PlayerState::Playing { path, position };
+                }
+                PlayerEvent::Pausing { path, position } => {
+                    self.state = PlayerState::Paused { path, position };
+                }
+                PlayerEvent::Resuming { path, position } => {
+                    self.state = PlayerState::Playing { path, position };
+                }
+                PlayerEvent::Position { path, position } => {
+                    self.state = PlayerState::Playing { path, position };
+                }
+                PlayerEvent::Stopped => {
+                    self.state = PlayerState::Stopped;
+                    self.queue.clear();
+                }
+                _ => {}
+            }
+            return;
+        }
         match event {
             PlayerEvent::Command(cmd) => self.handle_command(cmd),
             PlayerEvent::Loaded { item, result } => self.handle_loaded(item, result),
@@ -119,6 +184,10 @@ impl Player {
     }
 
     fn handle_command(&mut self, cmd: PlayerCommand) {
+        if self.librespot.is_some() {
+            self.handle_command_librespot(cmd);
+            return;
+        }
         match cmd {
             PlayerCommand::LoadQueue { items, position } => self.load_queue(items, position),
             PlayerCommand::LoadAndPlay { item } => self.load_and_play(item),
@@ -246,6 +315,10 @@ impl Player {
     }
 
     fn load_and_play(&mut self, item: PlaybackItem) {
+        if self.librespot.is_some() {
+            self.load_and_play_librespot(item, Duration::ZERO);
+            return;
+        }
         // Make sure to stop the sink, so any current audio source is cleared and the
         // playback stopped.
         self.audio_output_sink.stop();
@@ -293,7 +366,64 @@ impl Player {
         };
     }
 
+    fn load_and_play_librespot(&mut self, item: PlaybackItem, position: Duration) {
+        let Some(librespot) = &self.librespot else {
+            return;
+        };
+        librespot.load(item, true, position);
+    }
+
+    fn handle_end_of_track_librespot(&mut self) {
+        self.queue.skip_to_following();
+        if let Some(&item) = self.queue.get_current() {
+            self.load_and_play_librespot(item, Duration::ZERO);
+        } else {
+            self.stop();
+        }
+    }
+
+    fn handle_command_librespot(&mut self, cmd: PlayerCommand) {
+        match cmd {
+            PlayerCommand::LoadQueue { items, position } => {
+                self.queue.fill(items, position);
+                if let Some(&item) = self.queue.get_current() {
+                    self.load_and_play_librespot(item, Duration::ZERO);
+                } else {
+                    self.stop();
+                }
+            }
+            PlayerCommand::LoadAndPlay { item } => {
+                self.load_and_play_librespot(item, Duration::ZERO)
+            }
+            PlayerCommand::Preload { item } => {
+                if let Some(librespot) = &self.librespot {
+                    librespot.preload(item);
+                }
+            }
+            PlayerCommand::Pause => self.pause(),
+            PlayerCommand::Resume => self.resume(),
+            PlayerCommand::PauseOrResume => self.pause_or_resume(),
+            PlayerCommand::Previous => self.previous(),
+            PlayerCommand::Next => self.next(),
+            PlayerCommand::Stop => self.stop(),
+            PlayerCommand::Seek { position } => self.seek(position),
+            PlayerCommand::Configure { config } => {
+                self.config = config;
+                log::info!("librespot: playback config updated (restart required)");
+            }
+            PlayerCommand::SetQueueBehavior { behavior } => self.queue.set_behaviour(behavior),
+            PlayerCommand::AddToQueue { item } => self.queue.add(item),
+            PlayerCommand::AddNext { item } => self.queue.add_next(item),
+            PlayerCommand::ReplaceQueue { items } => self.queue.replace(items),
+            PlayerCommand::SetVolume { volume } => self.set_volume(volume),
+        }
+    }
+
     fn preload(&mut self, item: PlaybackItem) {
+        if let Some(librespot) = &self.librespot {
+            librespot.preload(item);
+            return;
+        }
         if self.is_in_preload(item) {
             return;
         }
@@ -317,6 +447,10 @@ impl Player {
     }
 
     fn set_volume(&mut self, volume: f64) {
+        if let Some(librespot) = &self.librespot {
+            librespot.set_volume(volume);
+            return;
+        }
         self.audio_output_sink.set_volume(volume as f32);
     }
 
@@ -333,6 +467,10 @@ impl Player {
     }
 
     fn pause(&mut self) {
+        if let Some(librespot) = &self.librespot {
+            librespot.pause();
+            return;
+        }
         match mem::replace(&mut self.state, PlayerState::Invalid) {
             PlayerState::Playing { path, position } | PlayerState::Paused { path, position } => {
                 log::info!("pausing playback");
@@ -349,6 +487,10 @@ impl Player {
     }
 
     fn resume(&mut self) {
+        if let Some(librespot) = &self.librespot {
+            librespot.play();
+            return;
+        }
         match mem::replace(&mut self.state, PlayerState::Invalid) {
             PlayerState::Playing { path, position } | PlayerState::Paused { path, position } => {
                 log::info!("resuming playback");
@@ -375,6 +517,15 @@ impl Player {
     }
 
     fn previous(&mut self) {
+        if self.librespot.is_some() {
+            self.queue.skip_to_previous();
+            if let Some(&item) = self.queue.get_current() {
+                self.load_and_play_librespot(item, Duration::ZERO);
+            } else {
+                self.stop();
+            }
+            return;
+        }
         if self.is_near_playback_start() {
             self.queue.skip_to_previous();
             if let Some(&item) = self.queue.get_current() {
@@ -388,6 +539,15 @@ impl Player {
     }
 
     fn next(&mut self) {
+        if self.librespot.is_some() {
+            self.queue.skip_to_next();
+            if let Some(&item) = self.queue.get_current() {
+                self.load_and_play_librespot(item, Duration::ZERO);
+            } else {
+                self.stop();
+            }
+            return;
+        }
         self.queue.skip_to_next();
         if let Some(&item) = self.queue.get_current() {
             self.load_and_play(item);
@@ -397,6 +557,11 @@ impl Player {
     }
 
     fn stop(&mut self) {
+        if let Some(librespot) = &self.librespot {
+            librespot.stop();
+            self.queue.clear();
+            return;
+        }
         self.sender.send(PlayerEvent::Stopped).unwrap();
         self.audio_output_sink.stop();
         self.state = PlayerState::Stopped;
@@ -405,6 +570,10 @@ impl Player {
     }
 
     fn seek(&mut self, position: Duration) {
+        if let Some(librespot) = &self.librespot {
+            librespot.seek(position);
+            return;
+        }
         self.playback_mgr.seek(position);
     }
 

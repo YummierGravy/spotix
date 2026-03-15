@@ -2,7 +2,7 @@
 
 use crate::error::Error;
 use crate::session::token::Token;
-use crate::system_info::{CLIENT_ID, DEVICE_ID, OS, SPOTIFY_SEMANTIC_VERSION};
+use crate::system_info::{CLIENT_ID, OS, SPOTIFY_SEMANTIC_VERSION, device_id};
 use crate::util::{default_ureq_agent_builder, solve_hash_cash};
 use data_encoding::HEXUPPER_PERMISSIVE;
 use librespot_protocol::clienttoken_http::{
@@ -51,7 +51,7 @@ impl ClientTokenProvider {
         client_data.client_id = CLIENT_ID.into();
 
         let connectivity_data = client_data.mut_connectivity_sdk_data();
-        connectivity_data.device_id = DEVICE_ID.to_string();
+        connectivity_data.device_id = device_id();
 
         let platform_data = connectivity_data
             .platform_specific_data

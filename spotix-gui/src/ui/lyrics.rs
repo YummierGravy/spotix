@@ -34,11 +34,16 @@ static PALETTE_CACHE: OnceLock<Mutex<Option<(Arc<str>, AlbumPalette)>>> = OnceLo
 fn cached_palette(data: &AppState) -> AlbumPalette {
     let cache = PALETTE_CACHE.get_or_init(|| Mutex::new(None));
 
-    let image_url: Option<Arc<str>> = data
-        .playback
-        .now_playing
-        .as_ref()
-        .and_then(|np| np.cover_image_url(300.0, 300.0))
+    // Use the same small cover size as the playback bar so we hit the
+    // LRU image cache. If that's not cached, try any available size.
+    let np = data.playback.now_playing.as_ref();
+    let image_url: Option<Arc<str>> = np
+        .and_then(|np| {
+            // Try the playback bar size first (most likely cached)
+            np.cover_image_url(64.0, 64.0)
+                .or_else(|| np.cover_image_url(32.0, 32.0))
+                .or_else(|| np.cover_image_url(300.0, 300.0))
+        })
         .map(Arc::from);
 
     let Some(url) = image_url else {
@@ -52,12 +57,35 @@ fn cached_palette(data: &AppState) -> AlbumPalette {
         return palette.clone();
     }
 
-    // Try to get the image from the in-memory cache
-    if let Some(image_buf) = WebApi::global().get_cached_image(&url) {
+    // Try to get the image from the in-memory cache first
+    let image_buf = WebApi::global()
+        .get_cached_image(&url)
+        .or_else(|| {
+            log::debug!("lyrics palette: image not in LRU cache, fetching: {url}");
+            // Not cached -- fetch it synchronously (fast, typically <100ms)
+            match WebApi::global().get_image(url.clone()) {
+                Ok(buf) => {
+                    log::debug!("lyrics palette: fetched image {}x{}", buf.size().width, buf.size().height);
+                    Some(buf)
+                }
+                Err(e) => {
+                    log::warn!("lyrics palette: failed to fetch image: {e}");
+                    None
+                }
+            }
+        });
+
+    if let Some(image_buf) = image_buf {
         let palette = palette::extract_palette(&image_buf);
+        log::info!(
+            "lyrics palette: extracted from artwork - dominant=({:.0},{:.0},{:.0}), highlight=({:.0},{:.0},{:.0})",
+            palette.dominant.as_rgba().0 * 255.0, palette.dominant.as_rgba().1 * 255.0, palette.dominant.as_rgba().2 * 255.0,
+            palette.highlight.as_rgba().0 * 255.0, palette.highlight.as_rgba().1 * 255.0, palette.highlight.as_rgba().2 * 255.0,
+        );
         *guard = Some((url, palette.clone()));
         palette
     } else {
+        log::warn!("lyrics palette: no image available, using default");
         AlbumPalette::default()
     }
 }

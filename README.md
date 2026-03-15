@@ -67,10 +67,11 @@ ulimit -d $(( 2 * `ulimit -d` ))
 
 ### Install from source
 ```shell
-cargo install --path spotix-gui
+cargo install --locked --path spotix-gui
 # This installs the `spotix` binary to ~/.cargo/bin/.
 # On Linux, the app auto-installs its .desktop file and icons on first run,
 # so it will appear in your application launcher.
+# --locked ensures the pinned dependency versions are used.
 ```
 
 ### Build from source

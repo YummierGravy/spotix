@@ -370,6 +370,11 @@ impl Player {
         let Some(librespot) = &self.librespot else {
             return;
         };
+        // Stop the current track before loading the next one to ensure the
+        // previous decoder pipeline is fully shut down. Without this, the old
+        // decoder can interfere with the new one (e.g. MP3 demuxer receiving
+        // OGG data), causing "channel closed" errors.
+        librespot.stop();
         librespot.load(item, true, position);
     }
 

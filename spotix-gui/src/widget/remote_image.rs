@@ -153,11 +153,9 @@ impl<T: Data> Widget<T> for RemoteImage<T> {
                 self.fade_progress = 1.0;
                 self.fading = false;
                 self.request_timer = None;
+                // Signal druid to run lifecycle (WidgetAdded) on the new
+                // WidgetPod before any update calls.
                 ctx.children_changed();
-                if let Some(image) = self.image.as_mut() {
-                    image.update(ctx, data, env);
-                }
-                self.placeholder.update(ctx, data, env);
                 return;
             }
 

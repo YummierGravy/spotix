@@ -299,3 +299,75 @@ fn ensure_contrast(fg: &[f64; 3], bg: &[f64; 3], min_ratio: f64) -> Color {
 fn to_color(rgb: &[f64; 3]) -> Color {
     Color::rgb8(rgb[0] as u8, rgb[1] as u8, rgb[2] as u8)
 }
+
+/// Colors for the dynamic playing/seek bar.
+#[derive(Clone, Debug)]
+pub struct BarPalette {
+    /// Vibrant accent for the elapsed portion.
+    pub elapsed: Color,
+    /// Glow variant (slightly brighter) for the pulse peak.
+    pub glow: Color,
+    /// Muted color for the remaining portion.
+    pub remaining: Color,
+}
+
+impl Default for BarPalette {
+    fn default() -> Self {
+        Self {
+            elapsed: Color::rgb8(140, 140, 140),
+            glow: Color::rgb8(180, 180, 180),
+            remaining: Color::rgb8(60, 60, 60),
+        }
+    }
+}
+
+/// Extract a bar palette from album artwork.
+/// Ensures the elapsed color is never too dark (minimum brightness floor).
+pub fn extract_bar_palette(image: &ImageBuf) -> BarPalette {
+    let pixels = sample_pixels(image);
+    if pixels.is_empty() {
+        return BarPalette::default();
+    }
+
+    let clusters = kmeans(&pixels, 5, 10);
+    if clusters.is_empty() {
+        return BarPalette::default();
+    }
+
+    let mut scored: Vec<(usize, [f64; 3])> = clusters;
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+
+    // Pick the most vibrant (saturated) cluster as accent
+    let accent_rgb = scored
+        .iter()
+        .max_by(|a, b| {
+            let sa = saturation(&a.1);
+            let sb = saturation(&b.1);
+            sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|c| c.1)
+        .unwrap_or(scored[0].1);
+
+    // Enforce minimum brightness so the bar is always visible
+    let mut elapsed = accent_rgb;
+    let min_lum = 0.35;
+    for _ in 0..30 {
+        if luminance(&elapsed) >= min_lum {
+            break;
+        }
+        elapsed = brighten(elapsed, 1.15);
+    }
+
+    // Glow is a brighter version for pulse peaks
+    let glow = brighten(elapsed, 1.3);
+
+    // Remaining is a very muted/dark version of the dominant
+    let dominant = scored[0].1;
+    let remaining = darken(dominant, 0.2);
+
+    BarPalette {
+        elapsed: to_color(&elapsed),
+        glow: to_color(&glow),
+        remaining: to_color(&remaining),
+    }
+}

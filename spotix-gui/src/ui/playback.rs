@@ -28,17 +28,17 @@ use crate::{
         AppState, AudioAnalysis, Library, Nav, NowPlaying, Playable, Playback, PlaybackOrigin,
         PlaybackPanelTab, PlaybackState, QueueBehavior, QueueDragState, QueueEntry,
     },
+    webapi::WebApi,
     widget::{
         Empty, Maybe, MyWidgetExt, RemoteImage,
         icons::{self, SvgIcon},
     },
 };
 
-use super::{episode, library, playable, theme, track, utils};
+use super::{episode, library, palette, playable, theme, track, utils};
 
 pub fn panel_widget() -> impl Widget<AppState> {
-    let seek_bar =
-        Maybe::or_empty(SeekBar::new).lens(AppState::playback.then(Playback::now_playing));
+    let seek_bar = SeekBar::new();
     let item_info =
         Maybe::or_empty(playing_item_widget).lens(AppState::playback.then(Playback::now_playing));
     let controls = player_widget();
@@ -1185,39 +1185,91 @@ where
 }
 
 struct SeekBar {
-    loudness_path: BezPath,
     base_progress: Duration,
     last_tick: Option<Instant>,
+    pulse_t: f64,
+    /// Cached bar palette + the artwork URL it was derived from.
+    bar_palette_cache: Option<(Arc<str>, palette::BarPalette)>,
 }
 
 impl SeekBar {
     fn new() -> Self {
         Self {
-            loudness_path: BezPath::new(),
             base_progress: Duration::ZERO,
             last_tick: None,
+            pulse_t: 0.0,
+            bar_palette_cache: None,
         }
     }
 
-    fn current_progress(&self, data: &NowPlaying) -> Duration {
+    fn current_progress(&self, np: &NowPlaying) -> Duration {
         let mut progress = self.base_progress;
-        if data.is_playing
+        if np.is_playing
             && let Some(last_tick) = self.last_tick
         {
             progress = progress.saturating_add(last_tick.elapsed());
         }
-        progress.min(data.item.duration())
+        progress.min(np.item.duration())
+    }
+
+    fn bar_palette(&mut self, np: &NowPlaying) -> &palette::BarPalette {
+        let url: Option<Arc<str>> = np
+            .cover_image_url(64.0, 64.0)
+            .or_else(|| np.cover_image_url(32.0, 32.0))
+            .map(Arc::from);
+
+        let needs_refresh = match (&self.bar_palette_cache, &url) {
+            (Some((cached_url, _)), Some(new_url)) => cached_url != new_url,
+            (None, Some(_)) => true,
+            (Some(_), None) => true,
+            (None, None) => false,
+        };
+
+        if needs_refresh {
+            if let Some(ref url) = url {
+                let image_buf = WebApi::global()
+                    .get_cached_image(url)
+                    .or_else(|| WebApi::global().get_image(url.clone()).ok());
+                if let Some(buf) = image_buf {
+                    let pal = palette::extract_bar_palette(&buf);
+                    self.bar_palette_cache = Some((url.clone(), pal));
+                } else {
+                    self.bar_palette_cache = Some((url.clone(), palette::BarPalette::default()));
+                }
+            } else {
+                self.bar_palette_cache = None;
+            }
+        }
+
+        self.bar_palette_cache
+            .as_ref()
+            .map(|(_, p)| p)
+            .unwrap_or_else(|| {
+                // Return a static default; this is fine because we only hold a ref
+                // for the duration of one paint call.
+                static DEFAULT: std::sync::LazyLock<palette::BarPalette> =
+                    std::sync::LazyLock::new(palette::BarPalette::default);
+                &DEFAULT
+            })
     }
 }
 
-impl Widget<NowPlaying> for SeekBar {
-    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut NowPlaying, _env: &Env) {
+impl Widget<AppState> for SeekBar {
+    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut AppState, _env: &Env) {
+        let is_playing = data
+            .playback
+            .now_playing
+            .as_ref()
+            .is_some_and(|np| np.is_playing);
+
         match event {
             Event::MouseMove(_) => {
-                ctx.set_cursor(&Cursor::Pointer);
+                if data.playback.now_playing.is_some() {
+                    ctx.set_cursor(&Cursor::Pointer);
+                }
             }
             Event::MouseDown(mouse) => {
-                if mouse.button == MouseButton::Left {
+                if mouse.button == MouseButton::Left && data.playback.now_playing.is_some() {
                     ctx.set_active(true);
                 }
             }
@@ -1230,8 +1282,12 @@ impl Widget<NowPlaying> for SeekBar {
                     ctx.set_active(false);
                 }
             }
-            Event::AnimFrame(_) => {
-                if data.is_playing {
+            Event::AnimFrame(interval) => {
+                if is_playing {
+                    self.pulse_t += (*interval as f64) * 1e-9;
+                    if self.pulse_t >= 60.0 {
+                        self.pulse_t -= 60.0;
+                    }
                     ctx.request_paint();
                     ctx.request_anim_frame();
                 }
@@ -1244,39 +1300,43 @@ impl Widget<NowPlaying> for SeekBar {
         &mut self,
         ctx: &mut LifeCycleCtx,
         event: &LifeCycle,
-        _data: &NowPlaying,
+        _data: &AppState,
         _env: &Env,
     ) {
-        match &event {
-            LifeCycle::Size(_bounds) => {
-                // self.loudness_path = compute_loudness_path(bounds, &data);
-            }
-            LifeCycle::HotChanged(_) => {
-                ctx.request_paint();
-            }
-            _ => {}
+        if let LifeCycle::HotChanged(_) = event {
+            ctx.request_paint();
         }
     }
 
     fn update(
         &mut self,
         ctx: &mut UpdateCtx,
-        old_data: &NowPlaying,
-        data: &NowPlaying,
+        old_data: &AppState,
+        data: &AppState,
         _env: &Env,
     ) {
-        if !old_data.same(data) {
-            self.base_progress = data.progress;
-            self.last_tick = data.is_playing.then_some(Instant::now());
-            if data.is_playing {
-                ctx.request_anim_frame();
+        let old_np = &old_data.playback.now_playing;
+        let new_np = &data.playback.now_playing;
+        if !old_np.same(new_np) {
+            if let Some(np) = new_np {
+                self.base_progress = np.progress;
+                self.last_tick = np.is_playing.then_some(Instant::now());
+                if np.is_playing {
+                    ctx.request_anim_frame();
+                }
+            } else {
+                self.base_progress = Duration::ZERO;
+                self.last_tick = None;
             }
             ctx.request_paint();
-        } else if data.is_playing {
-            // Keep animating while playing.
+        } else if new_np.as_ref().is_some_and(|np| np.is_playing) {
             ctx.request_anim_frame();
         } else {
             self.last_tick = None;
+        }
+        // Repaint if the dynamic bar setting changed
+        if old_data.config.dynamic_playing_bar != data.config.dynamic_playing_bar {
+            ctx.request_paint();
         }
     }
 
@@ -1284,22 +1344,32 @@ impl Widget<NowPlaying> for SeekBar {
         &mut self,
         _ctx: &mut LayoutCtx,
         bc: &BoxConstraints,
-        _data: &NowPlaying,
+        _data: &AppState,
         _env: &Env,
     ) -> Size {
         Size::new(bc.max().width, theme::grid(1.0))
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx, data: &NowPlaying, env: &Env) {
-        let progress = self.current_progress(data);
-        if self.loudness_path.is_empty() {
-            paint_progress_bar(ctx, data, env, progress)
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &AppState, env: &Env) {
+        let Some(np) = &data.playback.now_playing else {
+            // Nothing playing -- paint empty remaining bar
+            let bounds = ctx.size();
+            ctx.fill(bounds.to_rect(), &env.get(theme::GREY_600));
+            return;
+        };
+
+        let progress = self.current_progress(np);
+
+        if data.config.dynamic_playing_bar {
+            let pal = self.bar_palette(np).clone();
+            paint_dynamic_bar(ctx, np, &pal, progress, self.pulse_t);
         } else {
-            paint_audio_analysis(ctx, data, &self.loudness_path, env, progress)
+            paint_progress_bar(ctx, np, env, progress);
         }
     }
 }
 
+#[allow(dead_code)]
 fn _compute_loudness_path_from_analysis(
     bounds: &Size,
     total_duration: &Duration,
@@ -1361,6 +1431,7 @@ fn _compute_loudness_path_from_analysis(
     path
 }
 
+#[allow(dead_code)]
 fn paint_audio_analysis(
     ctx: &mut PaintCtx,
     data: &NowPlaying,
@@ -1387,6 +1458,51 @@ fn paint_audio_analysis(
         ctx.clip(elapsed);
         ctx.fill(path, &elapsed_color);
     });
+}
+
+fn paint_dynamic_bar(
+    ctx: &mut PaintCtx,
+    data: &NowPlaying,
+    pal: &palette::BarPalette,
+    progress: Duration,
+    pulse_t: f64,
+) {
+    let elapsed_time = progress.as_secs_f64();
+    let total_time = data.item.duration().as_secs_f64();
+    let bounds = ctx.size();
+
+    let elapsed_frac = (elapsed_time / total_time).clamp(0.0, 1.0);
+    let elapsed_width = bounds.width * elapsed_frac;
+
+    // Smooth pulse: blend between elapsed and glow using multi-frequency sine
+    let pulse = if data.is_playing {
+        let p1 = ((pulse_t * 1.3 * std::f64::consts::PI * 2.0).sin() + 1.0) / 2.0;
+        let p2 = ((pulse_t * 0.7 * std::f64::consts::PI * 2.0).sin() + 1.0) / 2.0;
+        p1 * 0.6 + p2 * 0.4
+    } else {
+        0.0
+    };
+
+    // Interpolate between elapsed and glow colors
+    let e = pal.elapsed.as_rgba();
+    let g = pal.glow.as_rgba();
+    let bar_color = druid::Color::rgba(
+        e.0 + (g.0 - e.0) * pulse,
+        e.1 + (g.1 - e.1) * pulse,
+        e.2 + (g.2 - e.2) * pulse,
+        1.0,
+    );
+
+    // Remaining
+    let remaining_rect = Rect::from_origin_size(
+        Point::new(elapsed_width, 0.0),
+        Size::new(bounds.width - elapsed_width, bounds.height),
+    );
+    ctx.fill(remaining_rect, &pal.remaining);
+
+    // Elapsed
+    let elapsed_rect = Rect::from_origin_size(Point::ORIGIN, Size::new(elapsed_width, bounds.height));
+    ctx.fill(elapsed_rect, &bar_color);
 }
 
 fn paint_progress_bar(ctx: &mut PaintCtx, data: &NowPlaying, env: &Env, progress: Duration) {

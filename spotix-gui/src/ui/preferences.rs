@@ -376,6 +376,16 @@ fn playback_tab_widget() -> impl Widget<AppState> {
                 .lens(AppState::config.then(Config::autoplay_enabled)),
         );
 
+    col = col.with_spacer(theme::grid(3.0));
+
+    col = col
+        .with_child(Label::new("Visual").with_font(theme::UI_FONT_MEDIUM))
+        .with_spacer(theme::grid(2.0))
+        .with_child(
+            Checkbox::new("Dynamic playing bar (album-art colors with pulse)")
+                .lens(AppState::config.then(Config::dynamic_playing_bar)),
+        );
+
     col
 }
 

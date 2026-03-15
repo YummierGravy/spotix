@@ -187,6 +187,8 @@ pub struct Config {
     pub webapi_client_id: Option<String>,
     /// Lyrics appearance mode.
     pub lyrics_appearance: LyricsAppearance,
+    /// Enable dynamic playing bar with album-art-derived colors and pulse.
+    pub dynamic_playing_bar: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Data, Serialize, Deserialize)]
@@ -228,6 +230,7 @@ impl Default for Config {
             eq: EqSettings::default(),
             webapi_client_id: None,
             lyrics_appearance: LyricsAppearance::default(),
+            dynamic_playing_bar: false,
         }
     }
 }

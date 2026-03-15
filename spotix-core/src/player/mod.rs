@@ -92,23 +92,37 @@ impl Player {
         librespot_creds: Option<Credentials>,
     ) -> Self {
         let (sender, receiver) = unbounded();
+        let cache_dir = Some(cache.base_dir().to_path_buf());
+        let audio_cache_limit = config.audio_cache_limit;
         let librespot = match config.engine {
             PlaybackEngine::Librespot => match session.credentials() {
-                Some(creds) => LibrespotBackend::new(&config, &creds, sender.clone())
-                    .map_err(|err| {
-                        log::error!("librespot backend init failed: {err}");
-                        err
-                    })
-                    .ok(),
+                Some(creds) => LibrespotBackend::new(
+                    &config,
+                    &creds,
+                    sender.clone(),
+                    cache_dir.clone(),
+                    audio_cache_limit,
+                )
+                .map_err(|err| {
+                    log::error!("librespot backend init failed: {err}");
+                    err
+                })
+                .ok(),
                 None => {
                     let creds = librespot_creds;
                     if let Some(creds) = creds {
-                        LibrespotBackend::new(&config, &creds, sender.clone())
-                            .map_err(|err| {
-                                log::error!("librespot backend init failed: {err}");
-                                err
-                            })
-                            .ok()
+                        LibrespotBackend::new(
+                            &config,
+                            &creds,
+                            sender.clone(),
+                            cache_dir.clone(),
+                            audio_cache_limit,
+                        )
+                        .map_err(|err| {
+                            log::error!("librespot backend init failed: {err}");
+                            err
+                        })
+                        .ok()
                     } else {
                         log::error!("librespot backend init failed: missing credentials");
                         None

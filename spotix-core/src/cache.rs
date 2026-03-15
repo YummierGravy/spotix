@@ -40,6 +40,10 @@ impl Cache {
         Ok(Arc::new(cache))
     }
 
+    pub fn base_dir(&self) -> &Path {
+        &self.base
+    }
+
     pub fn clear(&self) -> io::Result<()> {
         log::info!("clearing cache: {:?}", self.base);
 

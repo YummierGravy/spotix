@@ -1,7 +1,10 @@
-use std::{io, sync::Arc, thread, time::Duration};
+use std::{io, path::PathBuf, sync::Arc, thread, time::Duration};
 
 use librespot_core::{
-    Session, SpotifyUri, authentication::Credentials as LibrespotCredentials, config::SessionConfig,
+    Session, SpotifyUri,
+    authentication::Credentials as LibrespotCredentials,
+    cache::Cache as LibrespotCache,
+    config::SessionConfig,
 };
 use librespot_playback::{
     audio_backend,
@@ -39,11 +42,29 @@ impl LibrespotBackend {
         config: &PlaybackConfig,
         creds: &Credentials,
         sender: Sender<PlayerEvent>,
+        cache_dir: Option<PathBuf>,
+        audio_cache_limit: Option<u64>,
     ) -> Result<Self, Error> {
         let runtime = Runtime::new().map_err(map_error)?;
+
+        let cache = cache_dir
+            .as_ref()
+            .and_then(|dir| {
+                let audio_dir = Some(dir.join("librespot-audio"));
+                LibrespotCache::new(None::<PathBuf>, None::<PathBuf>, audio_dir, audio_cache_limit)
+                    .map_err(|err| {
+                        log::warn!("librespot: failed to create audio cache: {err}");
+                        err
+                    })
+                    .ok()
+            })
+            .inspect(|_| {
+                log::info!("librespot: audio cache enabled");
+            });
+
         let session = {
             let _guard = runtime.enter();
-            Session::new(SessionConfig::default(), None)
+            Session::new(SessionConfig::default(), cache)
         };
 
         let libre_creds = to_librespot_credentials(creds);

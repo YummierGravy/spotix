@@ -320,7 +320,7 @@ impl WebApi {
         const MAX_ATTEMPTS: u8 = 5;
         const BASE_BACKOFF: Duration = Duration::from_millis(500);
         const MAX_BACKOFF: Duration = Duration::from_secs(10);
-        const MIN_429_DELAY: Duration = Duration::from_secs(60);
+        const MIN_429_DELAY: Duration = Duration::from_secs(5);
         let mut attempts = 0;
         let mut backoff = BASE_BACKOFF;
 
@@ -427,7 +427,7 @@ impl WebApi {
     }
 
     fn wait_for_rate_limit(&self, _base_uri: &str) -> Result<(), Error> {
-        const MIN_API_INTERVAL: Duration = Duration::from_millis(900);
+        const MIN_API_INTERVAL: Duration = Duration::from_millis(200);
         let mut delay = None;
         {
             let mut limiter = self.rate_limiter.lock();
@@ -470,7 +470,7 @@ impl WebApi {
         let mut limiter = self.rate_limiter.lock();
         limiter.consecutive_429 = limiter.consecutive_429.saturating_add(1);
         let exp = (limiter.consecutive_429.saturating_sub(1)).min(6);
-        let base_secs = min_delay.as_secs().max(60);
+        let base_secs = min_delay.as_secs();
         let mut delay_secs = base_secs.saturating_mul(1u64 << exp);
         if let Some(retry) = retry_after {
             delay_secs = delay_secs.max(retry.as_secs());
@@ -737,7 +737,7 @@ impl WebApi {
     where
         F: Future<Output = rspotify::ClientResult<T>>,
     {
-        const MIN_429_DELAY: Duration = Duration::from_secs(60);
+        const MIN_429_DELAY: Duration = Duration::from_secs(5);
         let _permit = self.request_gate.acquire();
         self.wait_for_rate_limit("api.spotify.com")?;
 

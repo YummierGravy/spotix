@@ -388,7 +388,11 @@ impl Player {
         // previous decoder pipeline is fully shut down. Without this, the old
         // decoder can interfere with the new one (e.g. MP3 demuxer receiving
         // OGG data), causing "channel closed" errors.
-        librespot.stop();
+        //
+        // Use stop_for_transition() so the resulting Stopped event is
+        // suppressed -- the UI and core queue should not treat this as a
+        // real stop (which would clear the queue and trigger autoplay).
+        librespot.stop_for_transition();
         librespot.load(item, true, position);
     }
 

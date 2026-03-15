@@ -1,4 +1,13 @@
-use std::{io, path::PathBuf, sync::Arc, thread, time::Duration};
+use std::{
+    io,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::Duration,
+};
 
 use librespot_core::{
     Session, SpotifyUri,
@@ -33,6 +42,10 @@ use crossbeam_channel::Sender;
 pub struct LibrespotBackend {
     player: Arc<LibrespotPlayer>,
     mixer: Arc<dyn Mixer>,
+    /// When true, the event forwarder will suppress the next `Stopped` event.
+    /// Used during track transitions to prevent the UI from treating an
+    /// internal stop-before-load as a real playback stop.
+    transitioning: Arc<AtomicBool>,
     _runtime: Runtime,
     _event_thread: thread::JoinHandle<()>,
 }
@@ -91,11 +104,14 @@ impl LibrespotBackend {
             sink(None, librespot_playback::config::AudioFormat::default())
         });
 
-        let event_thread = spawn_event_forwarder(Arc::clone(&player), sender);
+        let transitioning = Arc::new(AtomicBool::new(false));
+        let event_thread =
+            spawn_event_forwarder(Arc::clone(&player), sender, Arc::clone(&transitioning));
 
         Ok(Self {
             player,
             mixer,
+            transitioning,
             _runtime: runtime,
             _event_thread: event_thread,
         })
@@ -111,6 +127,14 @@ impl LibrespotBackend {
         } else {
             log::warn!("librespot: unsupported item id {:?}", item.item_id);
         }
+    }
+
+    /// Stop the current track as part of a transition to a new track.
+    /// The resulting `Stopped` event from librespot will be suppressed
+    /// so the UI/core don't treat it as a real playback stop.
+    pub fn stop_for_transition(&self) {
+        self.transitioning.store(true, Ordering::SeqCst);
+        self.player.stop();
     }
 
     pub fn preload(&self, item: PlaybackItem) {
@@ -161,6 +185,7 @@ fn build_player_config(config: &PlaybackConfig) -> PlayerConfig {
 fn spawn_event_forwarder(
     player: Arc<LibrespotPlayer>,
     sender: Sender<PlayerEvent>,
+    transitioning: Arc<AtomicBool>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let runtime = Runtime::new().expect("librespot event runtime");
@@ -170,6 +195,10 @@ fn spawn_event_forwarder(
             while let Some(event) = events.recv().await {
                 match event {
                     LibrespotEvent::Loading { track_id, .. } => {
+                        // A new track is loading -- clear any lingering transition flag.
+                        // This acts as a safety net: even if Stopped was never emitted,
+                        // the transition is over once the next track starts loading.
+                        transitioning.store(false, Ordering::SeqCst);
                         if let Some(item_id) = spotify_uri_to_item_id(&track_id) {
                             let item = PlaybackItem {
                                 item_id,
@@ -220,9 +249,17 @@ fn spawn_event_forwarder(
                         let _ = sender.send(PlayerEvent::EndOfTrack);
                     }
                     LibrespotEvent::Stopped { .. } => {
-                        let _ = sender.send(PlayerEvent::Stopped);
+                        // If this stop was caused by a track transition (stop_for_transition),
+                        // suppress the event so the UI/core don't clear the queue.
+                        if transitioning.swap(false, Ordering::SeqCst) {
+                            log::debug!("librespot: suppressed transition Stopped event");
+                        } else {
+                            current_item = None;
+                            let _ = sender.send(PlayerEvent::Stopped);
+                        }
                     }
                     LibrespotEvent::Unavailable { .. } => {
+                        current_item = None;
                         let _ = sender.send(PlayerEvent::Stopped);
                     }
                     _ => {}

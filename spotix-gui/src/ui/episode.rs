@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use druid::{
-    LensExt, LocalizedString, Menu, MenuItem, Size, Widget, WidgetExt,
     widget::{CrossAxisAlignment, Flex, Label, LineBreaking},
+    LensExt, LocalizedString, Menu, MenuItem, Size, Widget, WidgetExt,
 };
 
 use crate::{
     cmd,
     data::{AppState, Episode, Library, Nav},
-    widget::{FadeOut, MyWidgetExt, RemoteImage, fill_between::FillBetween},
+    widget::{fill_between::FillBetween, FadeOut, MyWidgetExt, RemoteImage},
 };
 
 use super::{
@@ -38,7 +38,7 @@ pub fn playable_widget() -> impl Widget<PlayRow<Arc<Episode>>> {
         .lens(PlayRow::item)
         .padding_right(theme::grid(1.0));
 
-    let is_playing = playable::is_playing_marker_widget().lens(PlayRow::is_playing);
+    let indicator = playable::PlaybackIndicator::new().lens(PlayRow::playback_marker);
 
     let duration = Label::<Arc<Episode>>::dynamic(|episode, _| utils::as_human(episode.duration))
         .with_text_size(theme::TEXT_SIZE_SMALL)
@@ -47,7 +47,7 @@ pub fn playable_widget() -> impl Widget<PlayRow<Arc<Episode>>> {
 
     let top_row = Flex::row()
         .cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_flex_child(FillBetween::new(release, is_playing), 1.0)
+        .with_flex_child(FillBetween::new(release, indicator), 1.0)
         .with_default_spacer()
         .with_child(duration);
 

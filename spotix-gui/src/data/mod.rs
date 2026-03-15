@@ -121,6 +121,7 @@ impl AppState {
         let common_ctx = Arc::new(CommonCtx {
             now_playing: None,
             now_playing_progress: Duration::ZERO,
+            playback_active: false,
             library: Arc::clone(&library),
             show_track_cover: config.show_track_cover,
             nav: Nav::Home,
@@ -271,6 +272,7 @@ impl AppState {
 
     pub fn loading_playback(&mut self, item: Playable, origin: PlaybackOrigin) {
         self.common_ctx_mut().now_playing.take();
+        self.common_ctx_mut().playback_active = false;
         self.playback.state = PlaybackState::Loading;
         self.playback.now_playing.replace(NowPlaying {
             item,
@@ -285,6 +287,7 @@ impl AppState {
     pub fn start_playback(&mut self, item: Playable, origin: PlaybackOrigin, progress: Duration) {
         self.common_ctx_mut().now_playing.replace(item.clone());
         self.common_ctx_mut().now_playing_progress = progress;
+        self.common_ctx_mut().playback_active = true;
         self.playback.state = PlaybackState::Playing;
         self.playback.now_playing.replace(NowPlaying {
             item,
@@ -304,6 +307,7 @@ impl AppState {
 
     pub fn pause_playback(&mut self) {
         self.playback.state = PlaybackState::Paused;
+        self.common_ctx_mut().playback_active = false;
         if let Some(now_playing) = &mut self.playback.now_playing {
             now_playing.is_playing = false;
         }
@@ -317,6 +321,7 @@ impl AppState {
 
     pub fn resume_playback(&mut self) {
         self.playback.state = PlaybackState::Playing;
+        self.common_ctx_mut().playback_active = true;
         if let Some(now_playing) = &mut self.playback.now_playing {
             now_playing.is_playing = true;
         }
@@ -337,6 +342,7 @@ impl AppState {
         self.playback.now_playing.take();
         self.common_ctx_mut().now_playing.take();
         self.common_ctx_mut().now_playing_progress = Duration::ZERO;
+        self.common_ctx_mut().playback_active = false;
     }
 
     pub fn set_queue_behavior(&mut self, queue_behavior: QueueBehavior) {
@@ -598,6 +604,8 @@ impl Shows {
 pub struct CommonCtx {
     pub now_playing: Option<Playable>,
     pub now_playing_progress: Duration,
+    /// Whether audio is actively playing (not paused/stopped).
+    pub playback_active: bool,
     pub library: Arc<Library>,
     pub show_track_cover: bool,
     pub nav: Nav,
@@ -607,6 +615,20 @@ pub struct CommonCtx {
 impl CommonCtx {
     pub fn is_playing(&self, item: &Playable) -> bool {
         matches!(&self.now_playing, Some(i) if i.same(item))
+    }
+
+    /// Returns the playback marker state for the given item.
+    pub fn playback_marker(&self, item: &Playable) -> crate::ui::playable::PlaybackMarker {
+        use crate::ui::playable::PlaybackMarker;
+        if self.is_playing(item) {
+            if self.playback_active {
+                PlaybackMarker::Playing
+            } else {
+                PlaybackMarker::Paused
+            }
+        } else {
+            PlaybackMarker::Inactive
+        }
     }
 }
 

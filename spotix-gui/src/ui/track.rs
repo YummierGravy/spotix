@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use druid::{
-    Affine, Env, Lens, LensExt, LocalizedString, Menu, MenuItem, RenderContext, Size,
-    TextAlignment, Widget, WidgetExt,
     im::Vector,
     kurbo::BezPath,
     piet::{LineCap, LineJoin, StrokeStyle},
     widget::{CrossAxisAlignment, Either, Flex, Label, LineBreaking, Painter, ViewSwitcher},
+    Affine, Env, Lens, LensExt, LocalizedString, Menu, MenuItem, RenderContext, Size,
+    TextAlignment, Widget, WidgetExt,
 };
 use spotix_core::{
     audio::normalize::NormalizationLevel,
@@ -21,7 +21,7 @@ use crate::{
         QueueEntry, RecommendationsRequest, Track,
     },
     ui::playlist,
-    widget::{Empty, MyWidgetExt, RemoteImage, fill_between::FillBetween, icons},
+    widget::{fill_between::FillBetween, icons, Empty, MyWidgetExt, RemoteImage},
 };
 
 use super::{
@@ -102,8 +102,8 @@ pub fn playable_widget(track: Arc<Track>, display: Display) -> impl Widget<PlayR
             .with_line_break_mode(LineBreaking::Clip)
             .lens(PlayRow::item.then(Track::name.in_arc()))
             .padding_right(theme::grid(1.0));
-        let is_playing = playable::is_playing_marker_widget().lens(PlayRow::is_playing);
-        major.add_flex_child(FillBetween::new(track_name, is_playing), 1.0);
+        let indicator = playable::PlaybackIndicator::new().lens(PlayRow::playback_marker);
+        major.add_flex_child(FillBetween::new(track_name, indicator), 1.0);
     }
 
     let mut minor_row = Flex::row();
@@ -206,7 +206,7 @@ pub fn playable_widget(track: Arc<Track>, display: Display) -> impl Widget<PlayR
                 return *target_id == row.item.id;
             }
             // Otherwise check if it's playing or is the current track
-            row.is_playing || row.ctx.now_playing.as_ref().is_some_and(|playable| {
+            row.is_playing() || row.ctx.now_playing.as_ref().is_some_and(|playable| {
                 matches!(playable, Playable::Track(track) if track.id == row.item.id)
             })
         })

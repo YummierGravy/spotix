@@ -34,7 +34,7 @@ use crate::{
     },
 };
 
-use super::{episode, library, theme, track, utils};
+use super::{episode, library, playable, theme, track, utils};
 
 pub fn panel_widget() -> impl Widget<AppState> {
     let seek_bar =
@@ -291,6 +291,7 @@ struct QueueRow {
     entries: Arc<Vector<QueueEntry>>,
     library: Arc<Library>,
     is_now_playing: bool,
+    playback_marker: playable::PlaybackMarker,
     show_remove: bool,
     is_dragging: bool,
     is_drag_over: bool,
@@ -351,6 +352,7 @@ fn recent_entries(data: &AppState) -> Vector<QueuePanelRow> {
         Arc::clone(&data.library),
         QueueRowArgs {
             now_playing_id: None,
+            playback_active: false,
             drag: &data.queue_drag,
             can_drag: false,
             base_queue_index: 0,
@@ -371,6 +373,7 @@ fn recent_entries(data: &AppState) -> Vector<QueuePanelRow> {
 
 struct QueueRowArgs<'a> {
     now_playing_id: Option<ItemId>,
+    playback_active: bool,
     drag: &'a QueueDragState,
     can_drag: bool,
     base_queue_index: usize,
@@ -396,6 +399,15 @@ fn to_queue_rows(
             position
         };
         let is_now_playing = args.now_playing_id.is_some_and(|id| entry.item.id() == id);
+        let playback_marker = if is_now_playing {
+            if args.playback_active {
+                playable::PlaybackMarker::Playing
+            } else {
+                playable::PlaybackMarker::Paused
+            }
+        } else {
+            playable::PlaybackMarker::Inactive
+        };
         let drag_active = args.drag.active;
         rows.push_back(QueueRow {
             entry: entry.clone(),
@@ -404,6 +416,7 @@ fn to_queue_rows(
             entries: Arc::clone(&shared),
             library: Arc::clone(&library),
             is_now_playing,
+            playback_marker,
             show_remove: false,
             is_dragging: drag_active && args.drag.source_index == Some(absolute_index),
             is_drag_over: drag_active && args.drag.over_index == Some(absolute_index),
@@ -435,6 +448,7 @@ fn build_queue_panel_rows(data: &AppState, entries: Vector<QueueEntry>) -> Vecto
         Arc::clone(&data.library),
         QueueRowArgs {
             now_playing_id,
+            playback_active: matches!(data.playback.state, PlaybackState::Playing),
             drag: &data.queue_drag,
             can_drag: true,
             base_queue_index,
@@ -638,8 +652,18 @@ fn queue_row_widget() -> impl Widget<QueuePanelRow> {
 
     let cover = queue_cover_widget(theme::grid(4.0));
     let remove_button = queue_remove_slot();
+
+    let indicator = playable::PlaybackIndicator::new().lens(Map::new(
+        |row: &QueuePanelRow| match row {
+            QueuePanelRow::Item(item) => item.playback_marker,
+            _ => playable::PlaybackMarker::Inactive,
+        },
+        |_, _| {},
+    ));
+
     let title_row = Flex::row()
         .with_flex_child(title, 1.0)
+        .with_child(indicator)
         .with_child(SizedBox::new(Align::right(duration)).fix_width(theme::grid(5.0)));
 
     Flex::row()

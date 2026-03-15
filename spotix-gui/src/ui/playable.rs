@@ -1,12 +1,11 @@
-use std::{mem, sync::Arc};
+use std::{f64::consts::PI, mem, sync::Arc};
 
 use druid::{
-    Data, Env, Event, EventCtx, Lens, RenderContext, Selector, Widget, WidgetExt,
+    Data, Env, Event, EventCtx, Lens, RenderContext, Selector, Size, Widget, WidgetExt,
     im::Vector,
-    kurbo::Line,
+    kurbo::Rect,
     lens::Map,
-    piet::StrokeStyle,
-    widget::{Controller, ControllerHost, List, ListIter, Painter, ViewSwitcher},
+    widget::{Controller, ControllerHost, List, ListIter, ViewSwitcher, prelude::*},
 };
 
 use crate::{
@@ -80,20 +79,127 @@ fn playable_widget(display: Display) -> impl Widget<PlayRow<Playable>> {
     )
 }
 
-pub fn is_playing_marker_widget() -> impl Widget<bool> {
-    Painter::new(|ctx, is_playing, env| {
-        const STYLE: StrokeStyle = StrokeStyle::new().dash_pattern(&[1.0, 2.0]);
-
-        let y = ctx.size().height / 2.0;
-        let line = Line::new((0.0, y), (ctx.size().width, y));
-        let color = if *is_playing {
-            env.get(theme::GREY_300)
-        } else {
-            env.get(theme::GREY_500)
-        };
-        ctx.stroke_styled(line, &color, 1.0, &STYLE);
-    })
+/// State for the playback indicator shown on the currently playing item.
+#[derive(Clone, Copy, Debug, PartialEq, Data)]
+pub enum PlaybackMarker {
+    /// Not the current item.
+    Inactive,
+    /// Current item but playback is paused.
+    Paused,
+    /// Current item and audio is actively playing.
+    Playing,
 }
+
+/// A Spotify-style animated 3-bar equalizer indicator.
+/// Shows animated bars when `Playing`, frozen short bars when `Paused`,
+/// and nothing when `Inactive`.
+pub struct PlaybackIndicator {
+    t: f64,
+}
+
+impl PlaybackIndicator {
+    pub fn new() -> Self {
+        Self { t: 0.0 }
+    }
+}
+
+impl Widget<PlaybackMarker> for PlaybackIndicator {
+    fn event(
+        &mut self,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut PlaybackMarker,
+        _env: &Env,
+    ) {
+        if let Event::AnimFrame(interval) = event {
+            if *data == PlaybackMarker::Playing {
+                self.t += (*interval as f64) * 1e-9;
+                if self.t >= 4.0 {
+                    self.t -= 4.0;
+                }
+                ctx.request_anim_frame();
+            }
+            ctx.request_paint();
+        }
+    }
+
+    fn lifecycle(
+        &mut self,
+        ctx: &mut LifeCycleCtx,
+        event: &LifeCycle,
+        data: &PlaybackMarker,
+        _env: &Env,
+    ) {
+        if let LifeCycle::WidgetAdded = event
+            && *data == PlaybackMarker::Playing
+        {
+            ctx.request_anim_frame();
+        }
+    }
+
+    fn update(
+        &mut self,
+        ctx: &mut UpdateCtx,
+        old_data: &PlaybackMarker,
+        data: &PlaybackMarker,
+        _env: &Env,
+    ) {
+        if old_data != data {
+            if *data == PlaybackMarker::Playing {
+                ctx.request_anim_frame();
+            }
+            ctx.request_paint();
+        }
+    }
+
+    fn layout(
+        &mut self,
+        _ctx: &mut LayoutCtx,
+        _bc: &BoxConstraints,
+        _data: &PlaybackMarker,
+        _env: &Env,
+    ) -> Size {
+        Size::new(14.0, 14.0)
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &PlaybackMarker, env: &Env) {
+        if *data == PlaybackMarker::Inactive {
+            return;
+        }
+
+        let size = ctx.size();
+        let bar_width = 2.5;
+        let gap = 1.5;
+        let total_width = bar_width * 3.0 + gap * 2.0;
+        let x_offset = (size.width - total_width) / 2.0;
+        let max_height = size.height * 0.85;
+        let min_height = size.height * 0.15;
+
+        let color = env.get(theme::BLUE_200);
+
+        for i in 0..3 {
+            let x = x_offset + (i as f64) * (bar_width + gap);
+
+            let bar_height = if *data == PlaybackMarker::Playing {
+                // Each bar has a different phase offset for a natural look
+                let phase = self.t * 1.8 + (i as f64) * 0.7;
+                let wave = ((phase * PI).sin() + 1.0) / 2.0;
+                min_height + wave * (max_height - min_height)
+            } else {
+                // Paused: frozen short bars at different heights
+                let heights = [0.35, 0.55, 0.25];
+                min_height + heights[i] * (max_height - min_height)
+            };
+
+            let y = size.height - bar_height;
+            let rect = Rect::new(x, y, x + bar_width, size.height);
+            let rounded = rect.to_rounded_rect(1.0);
+            ctx.fill(rounded, &color);
+        }
+    }
+}
+
+
 
 #[derive(Clone, Data, Lens)]
 pub struct PlayRow<T> {
@@ -101,7 +207,7 @@ pub struct PlayRow<T> {
     pub ctx: Arc<CommonCtx>,
     pub origin: Arc<PlaybackOrigin>,
     pub position: usize,
-    pub is_playing: bool,
+    pub playback_marker: PlaybackMarker,
     pub selection_enabled: bool,
     pub selected: bool,
 }
@@ -113,10 +219,15 @@ impl<T> PlayRow<T> {
             ctx: self.ctx.clone(),
             origin: self.origin.clone(),
             position: self.position,
-            is_playing: self.is_playing,
+            playback_marker: self.playback_marker,
             selection_enabled: self.selection_enabled,
             selected: self.selected,
         }
+    }
+
+    /// Legacy accessor for backward compat.
+    pub fn is_playing(&self) -> bool {
+        self.playback_marker != PlaybackMarker::Inactive
     }
 }
 
@@ -291,7 +402,7 @@ where
             let selected = self.data.is_selected(&item);
             cb(
                 &PlayRow {
-                    is_playing: self.ctx.is_playing(&item),
+                    playback_marker: self.ctx.playback_marker(&item),
                     ctx: self.ctx.to_owned(),
                     origin: origin.clone(),
                     item,
@@ -318,7 +429,7 @@ where
             let selected = self.data.is_selected(&item);
             cb(
                 &mut PlayRow {
-                    is_playing: self.ctx.is_playing(&item),
+                    playback_marker: self.ctx.playback_marker(&item),
                     ctx: self.ctx.to_owned(),
                     origin: origin.clone(),
                     item,

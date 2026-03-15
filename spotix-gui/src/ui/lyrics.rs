@@ -387,6 +387,13 @@ impl Widget<WithCtx<TrackLines>> for LyricLine {
         if !old_data.data.same(&data.data)
             || old_data.ctx.now_playing_progress != data.ctx.now_playing_progress
         {
+            // If the active/bold state changed, we need a full re-layout
+            // because bold text can wrap differently and change the row height.
+            let (old_active, _) = lyric_state(old_data);
+            let (new_active, _) = lyric_state(data);
+            if old_active != new_active {
+                ctx.request_layout();
+            }
             ctx.request_paint();
         }
     }
@@ -398,6 +405,16 @@ impl Widget<WithCtx<TrackLines>> for LyricLine {
         data: &WithCtx<TrackLines>,
         env: &druid::Env,
     ) -> Size {
+        // Use the same weight as paint() so the measured height matches
+        // what will actually be rendered. Without this, bold active lines
+        // can reflow to more lines than measured, overlapping the next lyric.
+        let (active, _past) = lyric_state(data);
+        let weight = if active {
+            druid::piet::FontWeight::BOLD
+        } else {
+            druid::piet::FontWeight::REGULAR
+        };
+
         let text = data.data.words.as_str();
         let padding_x = theme::grid(1.0);
         let max_width = (bc.max().width - padding_x * 2.0).max(0.0);
@@ -406,6 +423,7 @@ impl Widget<WithCtx<TrackLines>> for LyricLine {
             .text()
             .new_text_layout(text.to_string())
             .font(env.get(theme::UI_FONT).family.clone(), font_size)
+            .default_attribute(druid::piet::TextAttribute::Weight(weight))
             .max_width(max_width)
             .alignment(TextAlignment::Start)
             .build()

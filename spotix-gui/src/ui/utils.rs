@@ -5,17 +5,18 @@ use std::{
 };
 
 use druid::{
-    Data, ImageBuf, Point, Vec2, Widget, WidgetExt, WidgetPod, image,
+    image,
     kurbo::Circle,
     piet::InterpolationMode,
-    widget::{CrossAxisAlignment, FillStrat, Flex, Image, Label, SizedBox, prelude::*},
+    widget::{prelude::*, CrossAxisAlignment, FillStrat, Flex, Image, Label},
+    Color, Data, ImageBuf, Point, Vec2, Widget, WidgetExt, WidgetPod,
 };
 use time_humanize::HumanTime;
 
 use crate::{
     data::WithCtx,
     error::Error,
-    widget::{MyWidgetExt, PromiseError, icons},
+    widget::{icons, MyWidgetExt, PromiseError},
 };
 
 use super::theme;
@@ -157,7 +158,70 @@ pub fn stat_row<T: Data>(
 }
 
 pub fn placeholder_widget<T: Data>() -> impl Widget<T> {
-    SizedBox::empty().background(theme::BACKGROUND_DARK)
+    SkeletonPulse::new()
+}
+
+/// A pulsing skeleton placeholder that smoothly oscillates between two
+/// grey tones, providing visual feedback that content is loading.
+struct SkeletonPulse {
+    t: f64,
+}
+
+impl SkeletonPulse {
+    fn new() -> Self {
+        Self { t: 0.0 }
+    }
+}
+
+impl<T: Data> Widget<T> for SkeletonPulse {
+    fn event(&mut self, ctx: &mut EventCtx, event: &Event, _data: &mut T, _env: &Env) {
+        if let Event::AnimFrame(interval) = event {
+            // ~1.5s per full cycle for a calm, subtle pulse
+            self.t += (*interval as f64) * 1e-9 / 1.5;
+            if self.t >= 1.0 {
+                self.t -= 1.0;
+            }
+            ctx.request_anim_frame();
+            ctx.request_paint();
+        }
+    }
+
+    fn lifecycle(&mut self, ctx: &mut LifeCycleCtx, event: &LifeCycle, _data: &T, _env: &Env) {
+        if let LifeCycle::WidgetAdded = event {
+            ctx.request_anim_frame();
+        }
+    }
+
+    fn update(&mut self, _ctx: &mut UpdateCtx, _old_data: &T, _data: &T, _env: &Env) {}
+
+    fn layout(
+        &mut self,
+        _layout_ctx: &mut LayoutCtx,
+        bc: &BoxConstraints,
+        _data: &T,
+        _env: &Env,
+    ) -> Size {
+        bc.max()
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx, _data: &T, env: &Env) {
+        let rect = ctx.size().to_rect();
+        let dark = env.get(theme::GREY_600);
+        let light = env.get(theme::GREY_500);
+
+        // Smooth ease-in-out pulse using a sine wave (0→1→0)
+        let phase = (self.t * PI).sin();
+
+        let r = dark.as_rgba();
+        let s = light.as_rgba();
+        let color = Color::rgba(
+            r.0 + (s.0 - r.0) * phase,
+            r.1 + (s.1 - r.1) * phase,
+            r.2 + (s.2 - r.2) * phase,
+            1.0,
+        );
+        ctx.fill(rect, &color);
+    }
 }
 
 pub fn spinner_widget<T: Data>() -> impl Widget<T> {

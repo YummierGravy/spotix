@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use druid::{
-    Data, ImageBuf, Point, Selector, TimerToken, WidgetPod,
+    Color, Data, ImageBuf, Point, Selector, TimerToken, WidgetPod,
     widget::{FillStrat, Image, prelude::*},
 };
 
@@ -9,6 +9,9 @@ use crate::webapi::WebApi;
 
 pub const REQUEST_DATA: Selector<Arc<str>> = Selector::new("remote-image.request-data");
 pub const PROVIDE_DATA: Selector<ImagePayload> = Selector::new("remote-image.provide-data");
+
+/// Duration of the fade-in animation when an image arrives.
+const FADE_DURATION_SECS: f64 = 0.2;
 
 #[derive(Clone)]
 pub struct ImagePayload {
@@ -23,6 +26,10 @@ pub struct RemoteImage<T> {
     location: Option<Arc<str>>,
     request_timer: Option<TimerToken>,
     pending_request: Option<Arc<str>>,
+    /// 0.0 = image just arrived, 1.0 = fully visible.
+    fade_progress: f64,
+    /// Whether we're currently animating a fade-in.
+    fading: bool,
 }
 
 impl<T: Data> RemoteImage<T> {
@@ -37,6 +44,8 @@ impl<T: Data> RemoteImage<T> {
             image: None,
             request_timer: None,
             pending_request: None,
+            fade_progress: 1.0,
+            fading: false,
         }
     }
 }
@@ -50,7 +59,27 @@ impl<T: Data> Widget<T> for RemoteImage<T> {
                 self.image.replace(WidgetPod::new(
                     Image::new(payload.image_buf.clone()).fill_mode(FillStrat::Cover),
                 ));
+                self.fade_progress = 0.0;
+                self.fading = true;
                 ctx.children_changed();
+                ctx.request_anim_frame();
+            }
+            return;
+        }
+        if let Event::AnimFrame(interval) = event {
+            if self.fading {
+                self.fade_progress += (*interval as f64) * 1e-9 / FADE_DURATION_SECS;
+                if self.fade_progress >= 1.0 {
+                    self.fade_progress = 1.0;
+                    self.fading = false;
+                } else {
+                    ctx.request_anim_frame();
+                }
+                ctx.request_paint();
+            }
+            // Forward to children (placeholder needs AnimFrame for skeleton pulse)
+            if self.image.is_none() {
+                self.placeholder.event(ctx, event, data, env);
             }
             return;
         }
@@ -80,6 +109,8 @@ impl<T: Data> Widget<T> for RemoteImage<T> {
         if let LifeCycle::WidgetAdded = event {
             let location = (self.locator)(data, env);
             self.image = None;
+            self.fade_progress = 1.0;
+            self.fading = false;
             self.location.clone_from(&location);
             self.pending_request = location;
             if self.pending_request.is_some() {
@@ -91,15 +122,16 @@ impl<T: Data> Widget<T> for RemoteImage<T> {
         }
         if let Some(image) = self.image.as_mut() {
             image.lifecycle(ctx, event, data, env);
-        } else {
-            self.placeholder.lifecycle(ctx, event, data, env);
         }
+        self.placeholder.lifecycle(ctx, event, data, env);
     }
 
     fn update(&mut self, ctx: &mut UpdateCtx, _old_data: &T, data: &T, env: &Env) {
         let location = (self.locator)(data, env);
         if location != self.location {
             self.image = None;
+            self.fade_progress = 1.0;
+            self.fading = false;
             self.location.clone_from(&location);
             self.pending_request = location;
             if self.pending_request.is_some() {
@@ -120,28 +152,45 @@ impl<T: Data> Widget<T> for RemoteImage<T> {
         }
         if let Some(image) = self.image.as_mut() {
             image.update(ctx, data, env);
-        } else {
-            self.placeholder.update(ctx, data, env);
         }
+        self.placeholder.update(ctx, data, env);
     }
 
     fn layout(&mut self, ctx: &mut LayoutCtx, bc: &BoxConstraints, data: &T, env: &Env) -> Size {
-        if let Some(image) = self.image.as_mut() {
+        let size = if let Some(image) = self.image.as_mut() {
             let size = image.layout(ctx, bc, data, env);
             image.set_origin(ctx, Point::ORIGIN);
             size
         } else {
-            let size = self.placeholder.layout(ctx, bc, data, env);
-            self.placeholder.set_origin(ctx, Point::ORIGIN);
-            size
-        }
+            bc.max()
+        };
+        let placeholder_bc = BoxConstraints::tight(size);
+        self.placeholder.layout(ctx, &placeholder_bc, data, env);
+        self.placeholder.set_origin(ctx, Point::ORIGIN);
+        size
     }
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &T, env: &Env) {
         if let Some(image) = self.image.as_mut() {
-            image.paint(ctx, data, env)
+            if self.fade_progress >= 1.0 {
+                // Fully loaded, just paint the image.
+                image.paint(ctx, data, env);
+            } else {
+                // Fade in: paint the image, then overlay a semi-transparent
+                // scrim that matches the skeleton color. As fade_progress goes
+                // from 0→1 the scrim fades from opaque to transparent, revealing
+                // the image underneath.
+                image.paint(ctx, data, env);
+                let bg = env.get(crate::ui::theme::GREY_600);
+                let (r, g, b, _) = bg.as_rgba();
+                // Smooth ease-out curve for a natural reveal
+                let t = 1.0 - (1.0 - self.fade_progress).powi(2);
+                let scrim = Color::rgba(r, g, b, 1.0 - t);
+                let rect = ctx.size().to_rect();
+                ctx.fill(rect, &scrim);
+            }
         } else {
-            self.placeholder.paint(ctx, data, env)
+            self.placeholder.paint(ctx, data, env);
         }
     }
 }

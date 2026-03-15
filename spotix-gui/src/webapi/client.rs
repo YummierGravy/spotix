@@ -194,17 +194,46 @@ impl WebApi {
         WebApiCache::hash_key(raw)
     }
 
-    /// Get an access token. Prefers login5 (works with all Spotify APIs
-    /// and returns complete responses), falls back to OAuth PKCE.
-    fn access_token(&self) -> Result<String, Error> {
+    /// Choose the right token for the target host.
+    ///
+    /// - `api.spotify.com`: OAuth PKCE first (login5 gets 429-throttled),
+    ///   login5 as fallback when no OAuth token is available.
+    /// - Internal APIs (api-partner, spclient, etc.): login5 first
+    ///   (these endpoints reject OAuth tokens), OAuth as fallback.
+    fn access_token_for(&self, host: &str) -> Result<String, Error> {
+        if host == "api.spotify.com" {
+            self.access_token_oauth_first()
+        } else {
+            self.access_token_login5_first()
+        }
+    }
+
+    fn access_token_oauth_first(&self) -> Result<String, Error> {
+        if let Ok(Some(token)) = self.oauth_access_token() {
+            log::debug!("webapi: using oauth access token");
+            return Ok(token);
+        }
+        log::debug!("webapi: no oauth token, falling back to login5");
+        match self.login5.get_access_token(&self.session) {
+            Ok(token) => Ok(token.access_token),
+            Err(err) => {
+                log::warn!("webapi: login5 also failed: {err}");
+                Err(Error::WebApiError(
+                    "Web API authentication failed. Re-authenticate in Preferences.".to_string(),
+                ))
+            }
+        }
+    }
+
+    fn access_token_login5_first(&self) -> Result<String, Error> {
         match self.login5.get_access_token(&self.session) {
             Ok(token) => {
                 log::debug!("webapi: using login5 access token");
                 Ok(token.access_token)
             }
             Err(err) => {
-                log::warn!("webapi: login5 token failed: {err}");
-                if let Some(token) = self.oauth_access_token()? {
+                log::warn!("webapi: login5 failed: {err}");
+                if let Ok(Some(token)) = self.oauth_access_token() {
                     log::debug!("webapi: using oauth access token (fallback)");
                     Ok(token)
                 } else {
@@ -256,7 +285,9 @@ impl WebApi {
     }
 
     fn request_raw(&self, request: &RequestBuilder) -> Result<Response<Body>, RequestError> {
-        let token = self.access_token().map_err(RequestError::Auth)?;
+        let token = self
+            .access_token_for(&request.base_uri)
+            .map_err(RequestError::Auth)?;
         let url = request.build();
 
         fn configure_request<B>(
@@ -727,25 +758,29 @@ impl WebApi {
         let _permit = self.request_gate.acquire();
         self.wait_for_rate_limit("api.spotify.com")?;
 
-        // Try librespot session login5 token first
-        let libre_session = self.ensure_librespot_session()?;
-        let has_token = self.rspotify_rt.block_on(async {
-            if let Some(session) = libre_session {
-                self.rspotify.set_session(session).await;
-            }
-            self.rspotify.ensure_token().await
-        });
+        // rspotify calls go to api.spotify.com -- prefer OAuth to avoid 429s
+        let mut has_token = false;
+        if let Ok(Some(token)) = self.oauth_token_for_rspotify() {
+            self.rspotify_rt
+                .block_on(async { self.rspotify.set_token(token).await });
+            has_token = true;
+        }
 
-        // Fallback to OAuth token
+        // Fallback to librespot session login5 token
         if !has_token {
-            if let Some(token) = self.oauth_token_for_rspotify()? {
-                self.rspotify_rt
-                    .block_on(async { self.rspotify.set_token(token).await });
-            } else {
-                return Err(Error::WebApiError(
-                    "Web API authentication failed. Re-authenticate in Preferences.".to_string(),
-                ));
-            }
+            let libre_session = self.ensure_librespot_session()?;
+            has_token = self.rspotify_rt.block_on(async {
+                if let Some(session) = libre_session {
+                    self.rspotify.set_session(session).await;
+                }
+                self.rspotify.ensure_token().await
+            });
+        }
+
+        if !has_token {
+            return Err(Error::WebApiError(
+                "Web API authentication failed. Re-authenticate in Preferences.".to_string(),
+            ));
         }
 
         let result = self.rspotify_rt.block_on(async { f().await });
@@ -1983,7 +2018,7 @@ impl WebApi {
             region: String,
             timezone: String,
         }
-        let token = self.access_token()?;
+        let token = self.access_token_login5_first()?;
 
         let request = &RequestBuilder::new("json".to_string(), Method::Get, None)
             .set_protocol("http")
@@ -1998,7 +2033,7 @@ impl WebApi {
 
     pub fn get_section(&self, section_uri: &str) -> Result<MixedView, Error> {
         let (country, time_zone) = self.get_user_info()?;
-        let access_token = self.access_token()?;
+        let access_token = self.access_token_login5_first()?;
 
         let json = json!({
             "extensions": {

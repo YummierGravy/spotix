@@ -13,7 +13,7 @@ use crate::ui::playlist::{
 use crate::ui::theme;
 use crate::{
     cmd,
-    data::{AppState, Config},
+    data::{AlertActionKind, AppState, Config, PreferencesTab},
     ui,
     webapi::WebApi,
     widget::remote_image,
@@ -161,6 +161,14 @@ impl AppDelegate<AppState> for Delegate {
             Handled::Yes
         } else if cmd.is(commands::SHOW_PREFERENCES) {
             self.show_preferences(ctx);
+            Handled::Yes
+        } else if let Some(action_kind) = cmd.get(ui::ALERT_ACTION) {
+            match action_kind {
+                AlertActionKind::OpenAccountTab => {
+                    data.preferences.active = PreferencesTab::Account;
+                    self.show_preferences(ctx);
+                }
+            }
             Handled::Yes
         } else if cmd.is(cmd::CLOSE_ALL_WINDOWS) {
             self.close_all_windows(ctx);

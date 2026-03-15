@@ -7,8 +7,8 @@ use crate::{
         AfterDelay, AlertCleanupController, NavController, SessionController, SortController,
     },
     data::{
-        ALERT_DURATION, Alert, AlertStyle, AppState, CommonCtxSearch, Config, Nav, Playable,
-        Playback, Route, config::SortOrder,
+        ALERT_DURATION, Alert, AlertActionKind, AlertStyle, AppState, CommonCtxSearch, Config,
+        Nav, Playable, Playback, Route, config::SortOrder,
     },
     webapi::WebApi,
     widget::{
@@ -309,12 +309,36 @@ fn root_widget() -> impl Widget<AppState> {
     // .debug_paint_layout()
 }
 
+pub const ALERT_ACTION: Selector<AlertActionKind> = Selector::new("app.alert.action");
+
 fn alert_widget() -> impl Widget<AppState> {
     const BG: Key<Color> = Key::new("app.alert.BG");
     const DISMISS_ALERT: Selector<usize> = Selector::new("app.alert.dismiss");
 
     List::new(|| {
-        Flex::row()
+        let action_button = Either::new(
+            |alert: &Alert, _| alert.action.is_some(),
+            Label::dynamic(|alert: &Alert, _| {
+                alert
+                    .action
+                    .as_ref()
+                    .map(|a| a.label.to_string())
+                    .unwrap_or_default()
+            })
+            .with_font(theme::UI_FONT_MEDIUM)
+            .padding((theme::grid(1.0), theme::grid(0.5)))
+            .background(druid::Color::rgba8(255, 255, 255, 30))
+            .rounded(theme::BUTTON_BORDER_RADIUS)
+            .on_left_click(|ctx, _, alert: &mut Alert, _| {
+                if let Some(action) = &alert.action {
+                    ctx.submit_command(ALERT_ACTION.with(action.kind.clone()));
+                    ctx.submit_command(DISMISS_ALERT.with(alert.id));
+                }
+            }),
+            Empty,
+        );
+
+        let message_row = Flex::row()
             .with_child(
                 Label::dynamic(|alert: &Alert, _| match alert.style {
                     AlertStyle::Error => "Error:".to_string(),
@@ -324,6 +348,10 @@ fn alert_widget() -> impl Widget<AppState> {
             )
             .with_default_spacer()
             .with_flex_child(Label::raw().lens(Alert::message), 1.0)
+            .with_default_spacer()
+            .with_child(action_button);
+
+        message_row
             .padding(theme::grid(2.0))
             .background(BG)
             .env_scope(|env, alert: &Alert| {
@@ -338,7 +366,10 @@ fn alert_widget() -> impl Widget<AppState> {
             .controller(AfterDelay::new(
                 ALERT_DURATION,
                 |ctx, alert: &mut Alert, _| {
-                    ctx.submit_command(DISMISS_ALERT.with(alert.id));
+                    // Don't auto-dismiss persistent alerts
+                    if !alert.persistent {
+                        ctx.submit_command(DISMISS_ALERT.with(alert.id));
+                    }
                 },
             ))
     })

@@ -89,6 +89,9 @@ pub struct WebApi {
     rate_limiter: Mutex<RateLimiter>,
     request_gate: RequestGate,
     webapi_client_id: String,
+    /// Set when an OAuth refresh token is revoked. Checked by the UI
+    /// to show a re-authentication prompt.
+    oauth_revoked: std::sync::atomic::AtomicBool,
 }
 
 struct LibrespotState {
@@ -172,6 +175,7 @@ impl WebApi {
             rate_limiter: Mutex::new(rate_limiter),
             request_gate: RequestGate::new(8),
             webapi_client_id,
+            oauth_revoked: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -269,6 +273,8 @@ impl WebApi {
                     log::warn!("webapi: oauth refresh failed: {message}");
                     if message.contains("invalid_grant") {
                         *guard = None;
+                        self.oauth_revoked
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
                         log::warn!("webapi: oauth token revoked, clearing stored token");
                     }
                     return Ok(None);
@@ -660,6 +666,8 @@ impl WebApi {
                     log::warn!("webapi: oauth refresh failed: {message}");
                     if message.contains("invalid_grant") {
                         *guard = None;
+                        self.oauth_revoked
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
                         log::warn!("webapi: oauth token revoked, clearing stored token");
                     }
                     return Ok(None);
@@ -1437,6 +1445,15 @@ impl WebApi {
 
     pub fn set_oauth_token(&self, token: OAuthToken) {
         *self.oauth_token.lock() = Some(token);
+        self.oauth_revoked
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Check and clear the OAuth revocation flag. Returns `true` once
+    /// after a revocation, then `false` until the next one.
+    pub fn take_oauth_revoked(&self) -> bool {
+        self.oauth_revoked
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn webapi_client_id(&self) -> &str {

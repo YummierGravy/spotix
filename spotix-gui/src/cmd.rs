@@ -1,4 +1,4 @@
-use druid::{Selector, WidgetId, im::Vector};
+use druid::{im::Vector, Selector, WidgetId};
 use serde::{Deserialize, Serialize};
 use spotix_core::{item_id::ItemId, player::item::PlaybackItem};
 use std::sync::Arc;

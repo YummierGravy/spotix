@@ -377,6 +377,8 @@ impl AppState {
             style,
             id: Alert::fresh_id(),
             created_at: Instant::now(),
+            action: None,
+            persistent: false,
         };
         self.alerts.push_back(alert);
     }
@@ -389,6 +391,31 @@ impl AppState {
         self.add_alert(message, AlertStyle::Error);
     }
 
+    /// Show a persistent alert with a "Re-authenticate" button when
+    /// the OAuth token is revoked. Deduplicates so only one shows at a time.
+    pub fn oauth_revoked_alert(&mut self) {
+        // Don't stack duplicates
+        if self
+            .alerts
+            .iter()
+            .any(|a| a.action.as_ref().is_some_and(|act| act.kind == AlertActionKind::OpenAccountTab))
+        {
+            return;
+        }
+        let alert = Alert {
+            message: "Spotify session expired. Re-authenticate to restore Web API access.".into(),
+            style: AlertStyle::Error,
+            id: Alert::fresh_id(),
+            created_at: Instant::now(),
+            action: Some(AlertAction {
+                label: "Re-authenticate".into(),
+                kind: AlertActionKind::OpenAccountTab,
+            }),
+            persistent: true,
+        };
+        self.alerts.push_back(alert);
+    }
+
     pub fn dismiss_alert(&mut self, id: usize) {
         self.alerts.retain(|a| a.id != id);
     }
@@ -396,7 +423,7 @@ impl AppState {
     pub fn cleanup_alerts(&mut self) {
         let now = Instant::now();
         self.alerts
-            .retain(|alert| now.duration_since(alert.created_at) < ALERT_DURATION);
+            .retain(|alert| alert.persistent || now.duration_since(alert.created_at) < ALERT_DURATION);
     }
 }
 
@@ -686,6 +713,11 @@ pub struct Alert {
     pub message: Arc<str>,
     pub style: AlertStyle,
     pub created_at: Instant,
+    /// Optional action button label + kind. When set, the alert shows
+    /// a clickable button that submits the corresponding command.
+    pub action: Option<AlertAction>,
+    /// If true, this alert stays until dismissed by user action (no auto-dismiss).
+    pub persistent: bool,
 }
 
 impl Alert {
@@ -698,4 +730,16 @@ impl Alert {
 pub enum AlertStyle {
     Error,
     Info,
+}
+
+#[derive(Clone, Data, Eq, PartialEq)]
+pub struct AlertAction {
+    pub label: Arc<str>,
+    pub kind: AlertActionKind,
+}
+
+#[derive(Clone, Data, Eq, PartialEq)]
+pub enum AlertActionKind {
+    /// Open preferences to the Account tab for re-authentication.
+    OpenAccountTab,
 }

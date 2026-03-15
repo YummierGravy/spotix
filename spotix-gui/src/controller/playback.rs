@@ -1025,6 +1025,11 @@ where
                     data.progress_playback(progress.to_owned());
                 }
 
+                // Check if the OAuth token was revoked since the last tick
+                if WebApi::global().take_oauth_revoked() {
+                    data.oauth_revoked_alert();
+                }
+
                 self.report_scrobble(&data.playback);
                 self.update_media_control_playback(&data.playback);
                 self.maybe_request_autoplay(ctx, data);

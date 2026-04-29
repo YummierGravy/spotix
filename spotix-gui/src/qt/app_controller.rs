@@ -1,5 +1,7 @@
 use std::{
+    fs,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::Path,
     pin::Pin,
     sync::{Arc, Mutex, OnceLock},
     thread,
@@ -225,6 +227,7 @@ pub mod qobject {
         #[qproperty(QString, search_query)]
         #[qproperty(QString, search_status)]
         #[qproperty(QString, search_results_json)]
+        #[qproperty(QString, account_key)]
         #[qproperty(QString, profile_name)]
         #[qproperty(QString, library_status)]
         #[qproperty(QString, playlists_json)]
@@ -342,6 +345,10 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "openShow"]
         fn open_show(self: Pin<&mut Self>, id: &QString, name: &QString);
+
+        #[qinvokable]
+        #[cxx_name = "saveAccountKey"]
+        fn save_account_key(self: Pin<&mut Self>, key: &QString);
     }
 }
 
@@ -355,6 +362,7 @@ pub struct SpotixAppRust {
     search_query: QString,
     search_status: QString,
     search_results_json: QString,
+    account_key: QString,
     profile_name: QString,
     library_status: QString,
     playlists_json: QString,
@@ -381,6 +389,9 @@ impl Default for SpotixAppRust {
         let startup = startup_state();
         let playback = playback_service::snapshot();
         let nav_state = QtNavState::default();
+        let account_key = runtime::snapshot()
+            .and_then(|runtime| runtime.config.webapi_client_id.clone())
+            .unwrap_or_default();
         set_nav_state(nav_state.clone());
         let initial_detail = QtNavDocument {
             title: nav_state.current.title(),
@@ -401,6 +412,7 @@ impl Default for SpotixAppRust {
             search_query: QString::from(""),
             search_status: QString::from("Search is ready"),
             search_results_json: QString::from(empty_search_json()),
+            account_key: QString::from(&account_key),
             profile_name: QString::from(""),
             library_status: QString::from(if startup.session_configured {
                 "Session configured from saved credentials"
@@ -828,6 +840,38 @@ impl qobject::SpotixApp {
 
     pub fn activate_detail_row(mut self: Pin<&mut Self>, row_id: &QString) {
         let row_id = row_id.to_string();
+        match row_id.as_str() {
+            "account:login" | "account:reauth" | "account:change-token" => {
+                self.as_mut().start_spotify_login();
+                return;
+            }
+            "account:refresh" => {
+                self.as_mut().refresh_session();
+                self.as_mut().navigate_to(QtNavTarget::Login, false);
+                return;
+            }
+            "account:logout" => {
+                self.as_mut().logout();
+                return;
+            }
+            "account:clear-cache" => {
+                match clear_spotix_cache() {
+                    Ok(message) => {
+                        self.as_mut().set_detail_status(QString::from(&message));
+                        self.as_mut()
+                            .set_library_status(QString::from("Cache cleared"));
+                    }
+                    Err(err) => {
+                        self.as_mut().set_detail_status(QString::from(&format!(
+                            "Cache clear failed: {err}"
+                        )));
+                    }
+                }
+                self.as_mut().navigate_to(QtNavTarget::Login, false);
+                return;
+            }
+            _ => {}
+        }
         if let Some(track_id) = row_id.strip_prefix("track:") {
             let context_ids = parse_json_array::<QtDetailRow>(&self.detail_rows_json().to_string())
                 .into_iter()
@@ -889,6 +933,35 @@ impl qobject::SpotixApp {
             },
             true,
         );
+    }
+
+    pub fn save_account_key(mut self: Pin<&mut Self>, key: &QString) {
+        let key = key.to_string();
+        let trimmed = key.trim().to_string();
+        let result = runtime::with_runtime(|runtime| {
+            runtime.config.webapi_client_id = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.clone())
+            };
+            WebApi::global().set_webapi_client_id(runtime.config.effective_webapi_client_id());
+            runtime.config.save();
+        });
+
+        if result.is_some() {
+            self.as_mut().set_account_key(QString::from(&trimmed));
+            let message = if trimmed.is_empty() {
+                "Using the bundled Spotify Web API client ID"
+            } else {
+                "Saved Spotify Web API client ID"
+            };
+            self.as_mut().set_login_status(QString::from(message));
+            self.as_mut().set_detail_status(QString::from(message));
+        } else {
+            self.as_mut()
+                .set_detail_status(QString::from("Qt runtime is not initialized"));
+        }
+        self.as_mut().navigate_to(QtNavTarget::Login, false);
     }
 
     fn navigate_to(mut self: Pin<&mut Self>, target: QtNavTarget, push_history: bool) {
@@ -1022,16 +1095,7 @@ fn nav_tree(
     shows: &[QtShow],
 ) -> Vec<QtTreeItem> {
     let mut items = Vec::new();
-    push_tree_route(&mut items, "route:home", "", "home", "Spotix", "root", 0);
-    push_tree_route(
-        &mut items,
-        "route:login",
-        "route:home",
-        "account",
-        "Account",
-        "",
-        1,
-    );
+    push_tree_route(&mut items, "route:home", "", "home", "Music", "root", 0);
     push_tree_route(
         &mut items,
         "route:library",
@@ -1137,6 +1201,24 @@ fn nav_tree(
         "parity",
         1,
     );
+    push_tree_route(
+        &mut items,
+        "route:settings",
+        "",
+        "settings",
+        "Settings",
+        "account",
+        0,
+    );
+    push_tree_route(
+        &mut items,
+        "route:login",
+        "route:settings",
+        "account",
+        "Account",
+        "",
+        1,
+    );
 
     for item in &mut items {
         item.expanded = item.depth < 2 || item.id == format!("route:{}", state.current.route());
@@ -1187,7 +1269,7 @@ fn immediate_nav_document(target: &QtNavTarget, app: &qobject::SpotixApp) -> Opt
 
     let rows = match target {
         QtNavTarget::Home => home_rows(&status),
-        QtNavTarget::Login => account_rows(app.authenticated(), &app.login_error().to_string()),
+        QtNavTarget::Login => account_rows(&app.login_error().to_string()),
         QtNavTarget::Library => library_rows(app),
         QtNavTarget::SavedTracks => {
             qt_track_rows(&parse_json_array(&app.saved_tracks_json().to_string()), 0)
@@ -1385,18 +1467,53 @@ fn home_rows(status: &str) -> Vec<QtDetailRow> {
     ]
 }
 
-fn account_rows(authenticated: &bool, login_error: &str) -> Vec<QtDetailRow> {
-    let mut rows = vec![QtDetailRow::route(
-        "route:login",
-        "account",
-        if *authenticated {
-            "Connected"
-        } else {
-            "Login required"
-        },
-        "use the account commands to login/logout",
+fn account_rows(login_error: &str) -> Vec<QtDetailRow> {
+    let mut rows = Vec::new();
+    rows.extend(cache_status_rows());
+    rows.push(QtDetailRow::route(
+        "account:auth-section",
+        "section",
+        "Authentication",
+        "Spotify OAuth and saved token controls",
         0,
-    )];
+    ));
+    rows.push(account_action_row(
+        "account:login",
+        "Start web login",
+        "open Spotify auth in the browser",
+    ));
+    rows.push(account_action_row(
+        "account:reauth",
+        "Re-authenticate",
+        "replace saved OAuth/session credentials",
+    ));
+    rows.push(account_action_row(
+        "account:change-token",
+        "Use key then re-auth",
+        "edit the client ID field above, save it, then run web login",
+    ));
+    rows.push(account_action_row(
+        "account:refresh",
+        "Refresh session",
+        "reload saved credentials and token state",
+    ));
+    rows.push(account_action_row(
+        "account:logout",
+        "Sign out",
+        "clear saved credentials for this app",
+    ));
+    rows.push(QtDetailRow::route(
+        "account:data-section",
+        "section",
+        "Local data",
+        "cache and personalization maintenance",
+        0,
+    ));
+    rows.push(account_action_row(
+        "account:clear-cache",
+        "Clear cache",
+        "remove cached Spotify metadata and audio files",
+    ));
     if !login_error.is_empty() {
         rows.push(QtDetailRow::route(
             "route:login:error",
@@ -1407,6 +1524,116 @@ fn account_rows(authenticated: &bool, login_error: &str) -> Vec<QtDetailRow> {
         ));
     }
     rows
+}
+
+fn account_action_row(id: &str, label: &str, meta: &str) -> QtDetailRow {
+    QtDetailRow {
+        id: id.to_string(),
+        kind: "action".to_string(),
+        label: label.to_string(),
+        meta: meta.to_string(),
+        depth: 1,
+        playable: false,
+        expandable: false,
+    }
+}
+
+fn cache_status_rows() -> Vec<QtDetailRow> {
+    let mut rows = vec![QtDetailRow::route(
+        "account:cache-section",
+        "section",
+        "Cache",
+        "local disk usage and cache buckets",
+        0,
+    )];
+
+    let Some(cache_dir) = Config::cache_dir() else {
+        rows.push(QtDetailRow::route(
+            "account:cache-unavailable",
+            "cache",
+            "Cache directory",
+            "not available on this platform",
+            1,
+        ));
+        return rows;
+    };
+
+    if !cache_dir.exists() {
+        rows.push(QtDetailRow::route(
+            "account:cache-empty",
+            "cache",
+            "Cache directory",
+            format!("not created yet: {}", cache_dir.display()),
+            1,
+        ));
+        return rows;
+    }
+
+    let (total_bytes, total_files) = dir_usage(&cache_dir);
+    rows.push(QtDetailRow::route(
+        "account:cache-total",
+        "cache",
+        "Total cached",
+        format!(
+            "{} across {} file(s)",
+            format_bytes(total_bytes),
+            total_files
+        ),
+        1,
+    ));
+
+    let mut buckets = fs::read_dir(&cache_dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| {
+                    let path = entry.path();
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let (bytes, files) = if path.is_dir() {
+                        dir_usage(&path)
+                    } else {
+                        entry
+                            .metadata()
+                            .map(|metadata| (metadata.len(), 1))
+                            .unwrap_or((0, 0))
+                    };
+                    (name, bytes, files)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    buckets.sort_by(|left, right| right.1.cmp(&left.1));
+
+    if buckets.is_empty() {
+        rows.push(QtDetailRow::route(
+            "account:cache-buckets-empty",
+            "cache",
+            "Cache buckets",
+            "empty",
+            1,
+        ));
+    } else {
+        for (name, bytes, files) in buckets.into_iter().take(8) {
+            rows.push(QtDetailRow::route(
+                format!("account:cache-bucket:{name}"),
+                "cache",
+                cache_bucket_label(&name),
+                format!("{} | {} file(s)", format_bytes(bytes), files),
+                1,
+            ));
+        }
+    }
+
+    rows
+}
+
+fn cache_bucket_label(name: &str) -> String {
+    match name {
+        "files" | "audio" | "tracks" => format!("{name} (audio/content)"),
+        "webapi" | "metadata" | "api" => format!("{name} (Spotify metadata)"),
+        "images" | "covers" => format!("{name} (artwork)"),
+        _ => name.to_string(),
+    }
 }
 
 fn library_rows(app: &qobject::SpotixApp) -> Vec<QtDetailRow> {
@@ -1565,6 +1792,55 @@ fn error_rows(error: &str) -> Vec<QtDetailRow> {
         error,
         0,
     )]
+}
+
+fn clear_spotix_cache() -> Result<String, String> {
+    let cache_dir = Config::cache_dir().ok_or_else(|| "No cache directory found".to_string())?;
+    if !cache_dir.exists() {
+        return Ok("Cache is already empty".to_string());
+    }
+
+    fs::remove_dir_all(&cache_dir).map_err(|err| err.to_string())?;
+    fs::create_dir_all(&cache_dir).map_err(|err| err.to_string())?;
+    Ok(format!("Cleared cache at {}", cache_dir.display()))
+}
+
+fn dir_usage(path: &Path) -> (u64, usize) {
+    let Ok(entries) = fs::read_dir(path) else {
+        return (0, 0);
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| {
+            let path = entry.path();
+            let Ok(metadata) = entry.metadata() else {
+                return (0, 0);
+            };
+            if metadata.is_dir() {
+                dir_usage(&path)
+            } else {
+                (metadata.len(), 1)
+            }
+        })
+        .fold((0, 0), |(total_bytes, total_files), (bytes, files)| {
+            (total_bytes + bytes, total_files + files)
+        })
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit + 1 < UNITS.len() {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
+    }
 }
 
 fn parse_json_array<T: serde::de::DeserializeOwned>(json: &str) -> Vec<T> {

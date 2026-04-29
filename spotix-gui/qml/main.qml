@@ -16,6 +16,10 @@ ApplicationWindow {
 
     readonly property SpotixApp spotix: SpotixApp {}
     property string activePane: "detail"
+    property var expandedTreeIds: ({ "route:home": true, "route:library": true })
+    property string selectedTreeId: "route:home"
+    property int treeRevision: 0
+    property int playingTick: 0
     property color terminalBg: "#050505"
     property color panelBg: "#0b0f10"
     property color panelAlt: "#111718"
@@ -24,6 +28,8 @@ ApplicationWindow {
     property color dimText: "#839496"
     property color accent: "#00ff87"
     property color cyan: "#00d7ff"
+    property color kdeBlue: "#3daee9"
+    property color kdeViolet: "#9b59b6"
     property color warn: "#ffd75f"
     property color error: "#ff5f5f"
     property color selection: "#183a3a"
@@ -51,7 +57,7 @@ ApplicationWindow {
     }
 
     function currentTreeItem() {
-        var items = root.parseArray(root.spotix.nav_tree_json)
+        var items = treeList.model
         if (treeList.currentIndex < 0 || treeList.currentIndex >= items.length) {
             return null
         }
@@ -66,12 +72,23 @@ ApplicationWindow {
         return rows[detailList.currentIndex]
     }
 
+    function isAccountRoute() {
+        return root.spotix.route === "login"
+    }
+
+    function playingGlyph() {
+        var frames = ["|", "/", "-", "\\"]
+        return frames[root.playingTick % frames.length]
+    }
+
+    function isNowPlayingRow(row) {
+        return row && row.kind === "track" && root.spotix.playback_state === "Playing" && row.label === root.spotix.now_playing_title
+    }
+
     function activateCurrent() {
         if (root.activePane === "tree") {
             var item = root.currentTreeItem()
-            if (item && item.selectable) {
-                root.spotix.activateTreeItem(item.id)
-            }
+            root.activateTreeItem(item)
             return
         }
 
@@ -79,7 +96,7 @@ ApplicationWindow {
         if (!row) {
             return
         }
-        if (row.playable || row.kind === "album" || row.kind === "artist" || row.kind === "playlist" || row.kind === "show") {
+        if (row.playable || row.kind === "action" || row.kind === "album" || row.kind === "artist" || row.kind === "playlist" || row.kind === "show") {
             root.spotix.activateDetailRow(row.id)
         }
     }
@@ -91,6 +108,12 @@ ApplicationWindow {
             return
         }
         view.currentIndex = Math.max(0, Math.min(count - 1, view.currentIndex + delta))
+        if (root.activePane === "tree") {
+            var item = root.currentTreeItem()
+            if (item) {
+                root.selectedTreeId = item.id
+            }
+        }
         view.positionViewAtIndex(view.currentIndex, ListView.Contain)
     }
 
@@ -105,11 +128,210 @@ ApplicationWindow {
         return prefix + (expandable ? "+ " : "- ")
     }
 
+    function hasTreeChildren(itemId) {
+        var items = root.parseArray(root.spotix.nav_tree_json)
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].parent_id === itemId) {
+                return true
+            }
+        }
+        return false
+    }
+
+    function isTreeExpanded(itemId) {
+        return root.expandedTreeIds[itemId] === true
+    }
+
+    function setTreeExpanded(itemId, expanded) {
+        var next = {}
+        for (var key in root.expandedTreeIds) {
+            next[key] = root.expandedTreeIds[key]
+        }
+        next[itemId] = expanded
+        root.expandedTreeIds = next
+        root.treeRevision += 1
+        Qt.callLater(root.restoreTreeSelection)
+    }
+
+    function visibleTreeItems(json, revision) {
+        var items = root.parseArray(json)
+        var byId = {}
+        var visible = []
+        for (var i = 0; i < items.length; i++) {
+            byId[items[i].id] = items[i]
+        }
+        for (var j = 0; j < items.length; j++) {
+            var item = items[j]
+            var parentId = item.parent_id
+            var isVisible = true
+            while (parentId && byId[parentId]) {
+                if (!root.isTreeExpanded(parentId)) {
+                    isVisible = false
+                    break
+                }
+                parentId = byId[parentId].parent_id
+            }
+            if (isVisible) {
+                visible.push(item)
+            }
+        }
+        return visible
+    }
+
+    function treePrefix(item) {
+        var prefix = ""
+        for (var i = 0; i < item.depth; i++) {
+            prefix += "  "
+        }
+        if (root.hasTreeChildren(item.id)) {
+            return prefix + (root.isTreeExpanded(item.id) ? "- " : "+ ")
+        }
+        return prefix + "> "
+    }
+
+    function activateTreeItem(item) {
+        if (!item || !item.selectable) {
+            return
+        }
+        root.selectedTreeId = item.id
+        if (root.hasTreeChildren(item.id)) {
+            root.setTreeExpanded(item.id, !root.isTreeExpanded(item.id))
+        }
+        root.spotix.activateTreeItem(item.id)
+        Qt.callLater(root.restoreTreeSelection)
+    }
+
+    function collapseCurrentTreeItem() {
+        var item = root.currentTreeItem()
+        if (item && root.hasTreeChildren(item.id) && root.isTreeExpanded(item.id)) {
+            root.selectedTreeId = item.id
+            root.setTreeExpanded(item.id, false)
+            return true
+        }
+        return false
+    }
+
+    function moveToFirstTreeChild() {
+        var item = root.currentTreeItem()
+        if (!item || !root.hasTreeChildren(item.id)) {
+            return false
+        }
+        root.selectedTreeId = item.id
+        if (!root.isTreeExpanded(item.id)) {
+            root.setTreeExpanded(item.id, true)
+        }
+        var items = treeList.model
+        for (var i = treeList.currentIndex + 1; i < items.length; i++) {
+            if (items[i].parent_id === item.id) {
+                treeList.currentIndex = i
+                root.selectedTreeId = items[i].id
+                treeList.positionViewAtIndex(i, ListView.Contain)
+                return true
+            }
+        }
+        return false
+    }
+
+    function moveToTreeParent() {
+        var item = root.currentTreeItem()
+        if (!item || !item.parent_id) {
+            return false
+        }
+        var items = treeList.model
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].id === item.parent_id) {
+                treeList.currentIndex = i
+                root.selectedTreeId = items[i].id
+                treeList.positionViewAtIndex(i, ListView.Contain)
+                return true
+            }
+        }
+        return false
+    }
+
+    function restoreTreeSelection() {
+        var items = treeList.model
+        if (!items || items.length === 0) {
+            treeList.currentIndex = -1
+            return
+        }
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].id === root.selectedTreeId) {
+                treeList.currentIndex = i
+                treeList.positionViewAtIndex(i, ListView.Contain)
+                return
+            }
+        }
+        treeList.currentIndex = Math.max(0, Math.min(treeList.currentIndex, items.length - 1))
+        root.selectedTreeId = items[treeList.currentIndex].id
+    }
+
+    function progressRatio() {
+        if (root.spotix.playback_duration_ms <= 0) {
+            return 0
+        }
+        return Math.max(0, Math.min(1, root.spotix.playback_progress_ms / root.spotix.playback_duration_ms))
+    }
+
+    function volumePercent() {
+        return Math.round(Math.max(0, Math.min(1, root.spotix.volume)) * 100)
+    }
+
+    function terminalBar(ratio, width, head) {
+        var clamped = Math.max(0, Math.min(1, ratio))
+        var filled = Math.floor(clamped * width)
+        var output = "["
+        for (var i = 0; i < width; i++) {
+            if (i < filled) {
+                output += "="
+            } else if (i === filled && filled < width) {
+                output += head
+            } else {
+                output += "-"
+            }
+        }
+        return output + "]"
+    }
+
+    function cargoStatusWord() {
+        if (root.spotix.playback_state === "Playing") {
+            return "Playing"
+        }
+        if (root.spotix.playback_state === "Paused") {
+            return "Paused "
+        }
+        if (root.spotix.playback_state === "Loading") {
+            return "Loading"
+        }
+        if (root.spotix.playback_state === "Blocked") {
+            return "Blocked"
+        }
+        return "Stopped"
+    }
+
+    function accountName() {
+        if (root.spotix.profile_name.length > 0) {
+            return root.spotix.profile_name
+        }
+        return root.spotix.authenticated ? "Spotify account" : "Sign in"
+    }
+
+    function accountStatus() {
+        if (root.spotix.authenticated) {
+            return "Connected"
+        }
+        if (root.spotix.login_busy) {
+            return "Waiting for browser"
+        }
+        return "Login required"
+    }
+
     Timer {
         interval: 500
         running: true
         repeat: true
         onTriggered: {
+            root.playingTick += 1
             root.spotix.refreshPlayback()
             root.spotix.refreshSession()
         }
@@ -121,7 +343,7 @@ ApplicationWindow {
         focus: true
 
         Keys.onPressed: function(event) {
-            if (searchField.activeFocus && event.key !== Qt.Key_Escape) {
+            if ((searchField.activeFocus || accountKeyField.activeFocus) && event.key !== Qt.Key_Escape) {
                 return
             }
             if (event.key === Qt.Key_Down) {
@@ -133,12 +355,23 @@ ApplicationWindow {
             } else if (event.key === Qt.Key_Tab) {
                 root.activePane = root.activePane === "tree" ? "detail" : "tree"
                 event.accepted = true
-            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Right) {
+            } else if (event.key === Qt.Key_Right && root.activePane === "tree") {
+                if (!root.moveToFirstTreeChild()) {
+                    root.activateCurrent()
+                }
+                event.accepted = true
+            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                 root.activateCurrent()
                 event.accepted = true
             } else if (event.key === Qt.Key_Left || event.key === Qt.Key_Backspace) {
-                root.spotix.navigateBack()
-                event.accepted = true
+                if (root.activePane === "tree" && root.collapseCurrentTreeItem()) {
+                    event.accepted = true
+                } else if (root.activePane === "tree" && event.key === Qt.Key_Left && root.moveToTreeParent()) {
+                    event.accepted = true
+                } else {
+                    root.spotix.navigateBack()
+                    event.accepted = true
+                }
             } else if (event.key === Qt.Key_Space) {
                 root.spotix.playPause()
                 event.accepted = true
@@ -174,12 +407,64 @@ ApplicationWindow {
                     anchors.rightMargin: 12
                     spacing: 10
 
-                    Label {
-                        text: "spotix@spotify:~$"
-                        color: accent
-                        font.family: "monospace"
-                        font.pixelSize: 15
-                        font.bold: true
+                    Rectangle {
+                        Layout.preferredWidth: 260
+                        Layout.fillHeight: true
+                        Layout.topMargin: 5
+                        Layout.bottomMargin: 5
+                        color: accountMouse.containsMouse ? "#10262b" : "#081113"
+                        border.color: accountMouse.containsMouse ? accent : kdeBlue
+                        border.width: 1
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
+                            spacing: 8
+
+                            Label {
+                                text: root.spotix.authenticated ? "●" : "○"
+                                color: root.spotix.authenticated ? accent : warn
+                                font.family: "monospace"
+                                font.pixelSize: 13
+                                font.bold: true
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 0
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: root.accountName()
+                                    color: textColor
+                                    elide: Text.ElideRight
+                                    font.family: "monospace"
+                                    font.pixelSize: 13
+                                    font.bold: true
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: root.accountStatus()
+                                    color: root.spotix.authenticated ? accent : warn
+                                    elide: Text.ElideRight
+                                    font.family: "monospace"
+                                    font.pixelSize: 10
+                                }
+                            }
+                        }
+
+                        MouseArea {
+                            id: accountMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onClicked: {
+                                root.spotix.navigateToRoute("login")
+                                root.activePane = "detail"
+                                keyboardRoot.forceActiveFocus()
+                            }
+                        }
                     }
 
                     TextField {
@@ -205,13 +490,33 @@ ApplicationWindow {
                         }
                     }
 
-                    Button {
-                        text: "run"
-                        font.family: "monospace"
-                        onClicked: {
-                            root.spotix.navigateToRoute("search")
-                            root.spotix.submitSearch()
-                            keyboardRoot.forceActiveFocus()
+                    Rectangle {
+                        Layout.preferredWidth: 92
+                        Layout.fillHeight: true
+                        Layout.topMargin: 5
+                        Layout.bottomMargin: 5
+                        color: searchMouse.containsMouse ? "#10262b" : "#081113"
+                        border.color: searchMouse.containsMouse ? accent : kdeBlue
+                        border.width: 1
+
+                        Label {
+                            anchors.centerIn: parent
+                            text: "search"
+                            color: searchMouse.containsMouse ? accent : textColor
+                            font.family: "monospace"
+                            font.pixelSize: 13
+                            font.bold: true
+                        }
+
+                        MouseArea {
+                            id: searchMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onClicked: {
+                                root.spotix.navigateToRoute("search")
+                                root.spotix.submitSearch()
+                                keyboardRoot.forceActiveFocus()
+                            }
                         }
                     }
                 }
@@ -249,8 +554,10 @@ ApplicationWindow {
                             Layout.fillHeight: true
                             clip: true
                             currentIndex: 0
-                            model: root.parseArray(root.spotix.nav_tree_json)
+                            model: root.visibleTreeItems(root.spotix.nav_tree_json, root.treeRevision)
                             boundsBehavior: Flickable.StopAtBounds
+                            onCountChanged: Qt.callLater(root.restoreTreeSelection)
+                            onModelChanged: Qt.callLater(root.restoreTreeSelection)
 
                             delegate: Rectangle {
                                 width: treeList.width
@@ -265,7 +572,7 @@ ApplicationWindow {
 
                                     Label {
                                         Layout.fillWidth: true
-                                        text: root.depthPrefix(modelData.depth, modelData.expanded, modelData.playable) + modelData.label
+                                        text: root.treePrefix(modelData) + modelData.label
                                         color: ListView.isCurrentItem ? accent : textColor
                                         elide: Text.ElideRight
                                         font.family: "monospace"
@@ -286,7 +593,8 @@ ApplicationWindow {
                                     onClicked: {
                                         root.activePane = "tree"
                                         treeList.currentIndex = index
-                                        root.spotix.activateTreeItem(modelData.id)
+                                        root.selectedTreeId = modelData.id
+                                        root.activateTreeItem(modelData)
                                         keyboardRoot.forceActiveFocus()
                                     }
                                 }
@@ -340,6 +648,77 @@ ApplicationWindow {
 
                         Rectangle {
                             Layout.fillWidth: true
+                            Layout.preferredHeight: root.isAccountRoute() ? 58 : 0
+                            visible: root.isAccountRoute()
+                            color: "#0b1518"
+                            border.color: borderColor
+                            border.width: 1
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                spacing: 10
+
+                                Label {
+                                    text: "Web API client ID"
+                                    color: kdeBlue
+                                    font.family: "monospace"
+                                    font.pixelSize: 13
+                                    font.bold: true
+                                }
+
+                                TextField {
+                                    id: accountKeyField
+                                    Layout.fillWidth: true
+                                    text: root.spotix.account_key
+                                    placeholderText: "paste Spotify client ID; leave blank to use default"
+                                    color: textColor
+                                    placeholderTextColor: dimText
+                                    selectionColor: selection
+                                    selectedTextColor: textColor
+                                    font.family: "monospace"
+                                    font.pixelSize: 13
+                                    background: Rectangle {
+                                        color: "#000000"
+                                        border.color: accountKeyField.activeFocus ? accent : borderColor
+                                    }
+                                    onAccepted: {
+                                        root.spotix.saveAccountKey(text)
+                                        keyboardRoot.forceActiveFocus()
+                                    }
+                                }
+
+                                Rectangle {
+                                    Layout.preferredWidth: 84
+                                    Layout.fillHeight: true
+                                    color: saveKeyMouse.containsMouse ? "#10262b" : "#081113"
+                                    border.color: saveKeyMouse.containsMouse ? accent : kdeBlue
+                                    border.width: 1
+
+                                    Label {
+                                        anchors.centerIn: parent
+                                        text: "save"
+                                        color: saveKeyMouse.containsMouse ? accent : textColor
+                                        font.family: "monospace"
+                                        font.pixelSize: 13
+                                        font.bold: true
+                                    }
+
+                                    MouseArea {
+                                        id: saveKeyMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        onClicked: {
+                                            root.spotix.saveAccountKey(accountKeyField.text)
+                                            keyboardRoot.forceActiveFocus()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
                             Layout.preferredHeight: 1
                             color: borderColor
                         }
@@ -367,16 +746,26 @@ ApplicationWindow {
                                     Label {
                                         Layout.preferredWidth: 92
                                         text: "[" + modelData.kind + "]"
-                                        color: modelData.playable ? accent : cyan
+                                        color: root.isNowPlayingRow(modelData) ? accent : (modelData.playable ? accent : cyan)
                                         elide: Text.ElideRight
                                         font.family: "monospace"
                                         font.pixelSize: 12
                                     }
 
                                     Label {
+                                        Layout.preferredWidth: 18
+                                        text: root.isNowPlayingRow(modelData) ? root.playingGlyph() : ""
+                                        color: accent
+                                        horizontalAlignment: Text.AlignHCenter
+                                        font.family: "monospace"
+                                        font.pixelSize: 14
+                                        font.bold: true
+                                    }
+
+                                    Label {
                                         Layout.fillWidth: true
                                         text: root.depthPrefix(modelData.depth, modelData.expandable, modelData.playable) + modelData.label
-                                        color: ListView.isCurrentItem ? accent : textColor
+                                        color: root.isNowPlayingRow(modelData) || ListView.isCurrentItem ? accent : textColor
                                         elide: Text.ElideRight
                                         font.family: "monospace"
                                         font.pixelSize: 14
@@ -397,7 +786,7 @@ ApplicationWindow {
                                     onClicked: {
                                         root.activePane = "detail"
                                         detailList.currentIndex = index
-                                        if (modelData.playable || modelData.kind === "album" || modelData.kind === "artist" || modelData.kind === "playlist" || modelData.kind === "show") {
+                                        if (modelData.playable || modelData.kind === "action" || modelData.kind === "album" || modelData.kind === "artist" || modelData.kind === "playlist" || modelData.kind === "show") {
                                             root.spotix.activateDetailRow(modelData.id)
                                         }
                                         keyboardRoot.forceActiveFocus()
@@ -411,52 +800,114 @@ ApplicationWindow {
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 118
-                color: panelAlt
-                border.color: borderColor
+                Layout.preferredHeight: 138
+                color: "#071013"
+                border.color: kdeBlue
                 border.width: 1
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    height: 2
+                    gradient: Gradient {
+                        GradientStop { position: 0.0; color: kdeBlue }
+                        GradientStop { position: 0.55; color: accent }
+                        GradientStop { position: 1.0; color: kdeViolet }
+                    }
+                }
 
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 10
-                    spacing: 6
+                    spacing: 7
 
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 12
 
-                        Label {
+                        Rectangle {
                             Layout.fillWidth: true
-                            text: "now-playing: " + root.spotix.now_playing_title + " | " + root.spotix.now_playing_artist
-                            color: textColor
-                            elide: Text.ElideRight
-                            font.family: "monospace"
-                            font.pixelSize: 14
-                            font.bold: true
+                            Layout.preferredHeight: 34
+                            color: "#0b1518"
+                            border.color: borderColor
+                            border.width: 1
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 10
+                                anchors.rightMargin: 10
+                                spacing: 10
+
+                                Label {
+                                    text: "Now Playing"
+                                    color: kdeBlue
+                                    font.family: "monospace"
+                                    font.pixelSize: 14
+                                    font.bold: true
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: root.spotix.now_playing_title + " :: " + root.spotix.now_playing_artist + (root.spotix.now_playing_album.length > 0 ? " / " + root.spotix.now_playing_album : "")
+                                    color: textColor
+                                    elide: Text.ElideRight
+                                    font.family: "monospace"
+                                    font.pixelSize: 14
+                                    font.bold: true
+                                }
+
+                                Label {
+                                    text: root.spotix.authenticated ? "Connected" : "Login required"
+                                    color: root.spotix.authenticated ? accent : warn
+                                    font.family: "monospace"
+                                    font.pixelSize: 12
+                                }
+                            }
                         }
 
-                        Button {
-                            text: "prev"
-                            font.family: "monospace"
-                            onClicked: root.spotix.playPrevious()
-                        }
+                        Repeater {
+                            model: [
+                                { label: "prev", command: "previous" },
+                                { label: root.spotix.playback_state === "Playing" ? "pause" : "play", command: "toggle" },
+                                { label: "next", command: "next" },
+                                { label: "stop", command: "stop" }
+                            ]
 
-                        Button {
-                            text: root.spotix.playback_state === "Playing" ? "pause" : "play"
-                            font.family: "monospace"
-                            onClicked: root.spotix.playPause()
-                        }
+                            delegate: Rectangle {
+                                Layout.preferredWidth: 82
+                                Layout.preferredHeight: 34
+                                color: controlMouse.containsMouse ? "#10262b" : "#081113"
+                                border.color: controlMouse.containsMouse ? accent : kdeBlue
+                                border.width: 1
 
-                        Button {
-                            text: "next"
-                            font.family: "monospace"
-                            onClicked: root.spotix.playNext()
-                        }
+                                Label {
+                                    anchors.centerIn: parent
+                                    text: modelData.label
+                                    color: controlMouse.containsMouse ? accent : textColor
+                                    font.family: "monospace"
+                                    font.pixelSize: 13
+                                    font.bold: true
+                                }
 
-                        Button {
-                            text: "stop"
-                            font.family: "monospace"
-                            onClicked: root.spotix.stopPlayback()
+                                MouseArea {
+                                    id: controlMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    onClicked: {
+                                        if (modelData.command === "previous") {
+                                            root.spotix.playPrevious()
+                                        } else if (modelData.command === "toggle") {
+                                            root.spotix.playPause()
+                                        } else if (modelData.command === "next") {
+                                            root.spotix.playNext()
+                                        } else {
+                                            root.spotix.stopPlayback()
+                                        }
+                                        keyboardRoot.forceActiveFocus()
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -465,52 +916,140 @@ ApplicationWindow {
                         spacing: 10
 
                         Label {
-                            text: root.formatTime(root.spotix.playback_progress_ms)
+                            text: root.cargoStatusWord()
+                            color: root.spotix.playback_state === "Blocked" ? warn : accent
+                            font.family: "monospace"
+                            font.pixelSize: 13
+                            font.bold: true
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 18
+                            color: "#050909"
+                            border.color: kdeBlue
+                            border.width: 1
+                            clip: true
+
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                anchors.margins: 2
+                                width: Math.max(0, (parent.width - 4) * root.progressRatio())
+                                color: kdeBlue
+                                opacity: 0.72
+                            }
+
+                            Repeater {
+                                model: Math.max(0, Math.floor(parent.width / 18))
+
+                                Rectangle {
+                                    x: index * 18
+                                    y: 3
+                                    width: 1
+                                    height: parent.height - 6
+                                    color: borderColor
+                                }
+                            }
+
+                            Label {
+                                anchors.centerIn: parent
+                                text: Math.floor(root.progressRatio() * 100) + "%"
+                                color: textColor
+                                font.family: "monospace"
+                                font.pixelSize: 11
+                                font.bold: true
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: root.spotix.seekPlayback(mouse.x / Math.max(1, width))
+                            }
+                        }
+
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        Label {
+                            text: root.formatTime(root.spotix.playback_progress_ms) + " / " + root.formatTime(root.spotix.playback_duration_ms)
                             color: dimText
                             font.family: "monospace"
                             font.pixelSize: 12
-                        }
-
-                        Slider {
-                            Layout.fillWidth: true
-                            from: 0
-                            to: Math.max(1, root.spotix.playback_duration_ms)
-                            value: root.spotix.playback_progress_ms
-                            onMoved: root.spotix.seekPlayback(value / Math.max(1, root.spotix.playback_duration_ms))
                         }
 
                         Label {
-                            text: root.formatTime(root.spotix.playback_duration_ms)
-                            color: dimText
+                            text: "Volume"
+                            color: cyan
+                            font.family: "monospace"
+                            font.pixelSize: 12
+                            font.bold: true
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 16
+                            color: "#050909"
+                            border.color: cyan
+                            border.width: 1
+                            clip: true
+
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                anchors.margins: 2
+                                width: Math.max(0, (parent.width - 4) * Math.max(0, Math.min(1, root.spotix.volume)))
+                                color: cyan
+                                opacity: 0.68
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: root.spotix.setPlaybackVolume(mouse.x / Math.max(1, width))
+                            }
+                        }
+
+                        Label {
+                            Layout.preferredWidth: 42
+                            text: root.volumePercent() + "%"
+                            color: cyan
+                            horizontalAlignment: Text.AlignRight
+                            font.family: "monospace"
+                            font.pixelSize: 12
+                            font.bold: true
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 1
+                        color: borderColor
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: root.spotix.playback_status + " | " + root.spotix.queue_summary
+                            color: root.spotix.playback_state === "Blocked" ? warn : dimText
+                            elide: Text.ElideRight
                             font.family: "monospace"
                             font.pixelSize: 12
                         }
 
-                        Slider {
-                            Layout.preferredWidth: 110
-                            from: 0
-                            to: 1
-                            value: root.spotix.volume
-                            onMoved: root.spotix.setPlaybackVolume(value)
+                        Label {
+                            text: "keys: space play/pause | click bar seek | click vol set"
+                            color: dimText
+                            elide: Text.ElideRight
+                            font.family: "monospace"
+                            font.pixelSize: 12
                         }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "keys: tab pane | arrows move | enter/right open | left/backspace back | space play/pause | / search | ctrl+r reload"
-                        color: dimText
-                        elide: Text.ElideRight
-                        font.family: "monospace"
-                        font.pixelSize: 12
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.spotix.playback_status + " | " + root.spotix.queue_summary
-                        color: root.spotix.playback_state === "Blocked" ? warn : dimText
-                        elide: Text.ElideRight
-                        font.family: "monospace"
-                        font.pixelSize: 12
                     }
                 }
             }

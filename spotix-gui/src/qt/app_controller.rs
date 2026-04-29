@@ -1,6 +1,8 @@
 use std::{
     fs,
+    io::Read,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    num::NonZeroU32,
     path::Path,
     pin::Pin,
     sync::{Arc, Mutex, OnceLock},
@@ -8,6 +10,10 @@ use std::{
     time::Duration,
 };
 
+use artem::{
+    ConfigBuilder as AsciiConfigBuilder,
+    config::{ResizingDimension, TargetType},
+};
 use cxx_qt_lib::QString;
 use spotix_core::{
     connection::Credentials,
@@ -51,6 +57,8 @@ static LOGIN_RESULT: OnceLock<Mutex<Option<Result<SpotifyAuthResult, String>>>> 
 static LIBRARY_RESULT: OnceLock<Mutex<Option<Result<LibraryJson, String>>>> = OnceLock::new();
 static SEARCH_RESULT: OnceLock<Mutex<Option<Result<QtSearchResults, String>>>> = OnceLock::new();
 static NAV_RESULT: OnceLock<Mutex<Option<Result<QtNavPayload, String>>>> = OnceLock::new();
+static ART_RESULT: OnceLock<Mutex<Option<(String, Result<String, String>)>>> = OnceLock::new();
+static SAVED_TRACK_RESULT: OnceLock<Mutex<SavedTrackResultSlot>> = OnceLock::new();
 static NAV_STATE: OnceLock<Mutex<QtNavState>> = OnceLock::new();
 static PLAYBACK_CONFIGURED: OnceLock<Mutex<bool>> = OnceLock::new();
 
@@ -78,6 +86,13 @@ struct SpotifyAuthResult {
     credentials: Option<Credentials>,
     oauth_token: OAuthToken,
 }
+
+struct SavedTrackResult {
+    saved: bool,
+    status: Option<String>,
+}
+
+type SavedTrackResultSlot = Option<(String, Result<SavedTrackResult, String>)>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum QtNavTarget {
@@ -242,11 +257,17 @@ pub mod qobject {
         #[qproperty(QString, now_playing_title)]
         #[qproperty(QString, now_playing_artist)]
         #[qproperty(QString, now_playing_album)]
+        #[qproperty(QString, now_playing_image_url)]
+        #[qproperty(QString, now_playing_art_ascii)]
         #[qproperty(QString, playback_status)]
         #[qproperty(QString, queue_summary)]
         #[qproperty(i32, playback_progress_ms)]
         #[qproperty(i32, playback_duration_ms)]
         #[qproperty(f64, volume)]
+        #[qproperty(bool, shuffle_enabled)]
+        #[qproperty(QString, saved_track_id)]
+        #[qproperty(bool, now_playing_saved)]
+        #[qproperty(bool, now_playing_saved_busy)]
         #[namespace = "spotix"]
         type SpotixApp = super::SpotixAppRust;
 
@@ -305,6 +326,14 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "stopPlayback"]
         fn stop_playback(self: Pin<&mut Self>);
+
+        #[qinvokable]
+        #[cxx_name = "toggleShuffle"]
+        fn toggle_shuffle(self: Pin<&mut Self>);
+
+        #[qinvokable]
+        #[cxx_name = "toggleNowPlayingSaved"]
+        fn toggle_now_playing_saved(self: Pin<&mut Self>);
 
         #[qinvokable]
         #[cxx_name = "seekPlayback"]
@@ -377,11 +406,17 @@ pub struct SpotixAppRust {
     now_playing_title: QString,
     now_playing_artist: QString,
     now_playing_album: QString,
+    now_playing_image_url: QString,
+    now_playing_art_ascii: QString,
     playback_status: QString,
     queue_summary: QString,
     playback_progress_ms: i32,
     playback_duration_ms: i32,
     volume: f64,
+    shuffle_enabled: bool,
+    saved_track_id: QString,
+    now_playing_saved: bool,
+    now_playing_saved_busy: bool,
 }
 
 impl Default for SpotixAppRust {
@@ -436,11 +471,17 @@ impl Default for SpotixAppRust {
             now_playing_title: QString::from(&playback.title),
             now_playing_artist: QString::from(&playback.artist),
             now_playing_album: QString::from(&playback.album),
+            now_playing_image_url: QString::from(""),
+            now_playing_art_ascii: QString::from(ascii_art_placeholder()),
             playback_status: QString::from(&playback.status),
             queue_summary: QString::from(&playback.queue_summary),
             playback_progress_ms: duration_ms(playback.progress),
             playback_duration_ms: duration_ms(playback.duration),
             volume: playback.volume,
+            shuffle_enabled: playback.shuffle,
+            saved_track_id: QString::from(""),
+            now_playing_saved: false,
+            now_playing_saved_busy: false,
         }
     }
 }
@@ -772,6 +813,11 @@ impl qobject::SpotixApp {
             .set_now_playing_artist(QString::from(&playback.artist));
         self.as_mut()
             .set_now_playing_album(QString::from(&playback.album));
+        let previous_image_url = self.now_playing_image_url().to_string();
+        self.as_mut()
+            .set_now_playing_image_url(QString::from(&playback.image_url));
+        self.as_mut()
+            .refresh_ascii_art(&playback.image_url, &previous_image_url);
         self.as_mut()
             .set_playback_status(QString::from(&playback.status));
         self.as_mut()
@@ -781,6 +827,53 @@ impl qobject::SpotixApp {
         self.as_mut()
             .set_playback_duration_ms(duration_ms(playback.duration));
         self.as_mut().set_volume(playback.volume);
+        self.as_mut().set_shuffle_enabled(playback.shuffle);
+        self.as_mut().sync_now_playing_saved(&playback.track_id);
+        self.as_mut().poll_saved_track_result();
+    }
+
+    fn refresh_ascii_art(mut self: Pin<&mut Self>, image_url: &str, previous_image_url: &str) {
+        self.as_mut().poll_art_result();
+        if image_url.is_empty() {
+            self.as_mut()
+                .set_now_playing_art_ascii(QString::from(ascii_art_placeholder()));
+            return;
+        }
+        if previous_image_url == image_url && !self.now_playing_art_ascii().is_empty() {
+            return;
+        }
+
+        self.as_mut()
+            .set_now_playing_art_ascii(QString::from(ascii_art_loading()));
+        let image_url = image_url.to_string();
+        thread::spawn(move || {
+            let result = album_art_to_ascii(&image_url);
+            *ART_RESULT
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+                .expect("qt art result lock poisoned") = Some((image_url, result));
+        });
+    }
+
+    fn poll_art_result(mut self: Pin<&mut Self>) {
+        let result = ART_RESULT
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .expect("qt art result lock poisoned")
+            .take();
+
+        if let Some((url, result)) = result
+            && url == self.now_playing_image_url().to_string()
+        {
+            match result {
+                Ok(ascii) => self
+                    .as_mut()
+                    .set_now_playing_art_ascii(QString::from(&ascii)),
+                Err(err) => self
+                    .as_mut()
+                    .set_now_playing_art_ascii(QString::from(&ascii_art_error(&err))),
+            }
+        }
     }
 
     pub fn play_pause(mut self: Pin<&mut Self>) {
@@ -801,6 +894,108 @@ impl qobject::SpotixApp {
     pub fn stop_playback(mut self: Pin<&mut Self>) {
         playback_service::stop();
         self.as_mut().refresh_playback();
+    }
+
+    pub fn toggle_shuffle(mut self: Pin<&mut Self>) {
+        let shuffle = playback_service::toggle_shuffle();
+        self.as_mut().set_shuffle_enabled(shuffle);
+        self.as_mut().refresh_playback();
+    }
+
+    pub fn toggle_now_playing_saved(mut self: Pin<&mut Self>) {
+        let playback = playback_service::snapshot();
+        if playback.track_id.is_empty() {
+            self.as_mut()
+                .set_playback_status(QString::from("No playing track to update"));
+            return;
+        }
+
+        let track_id = playback.track_id;
+        let target_saved = !self.now_playing_saved();
+        self.as_mut().set_saved_track_id(QString::from(&track_id));
+        self.as_mut().set_now_playing_saved(target_saved);
+        self.as_mut().set_now_playing_saved_busy(true);
+        self.as_mut()
+            .set_playback_status(QString::from(if target_saved {
+                "Adding to Saved Tracks"
+            } else {
+                "Removing from Saved Tracks"
+            }));
+        thread::spawn(move || {
+            let result = if target_saved {
+                WebApi::global().save_track(&track_id)
+            } else {
+                WebApi::global().unsave_track(&track_id)
+            }
+            .map(|()| SavedTrackResult {
+                saved: target_saved,
+                status: Some(if target_saved {
+                    "Added to Saved Tracks".to_string()
+                } else {
+                    "Removed from Saved Tracks".to_string()
+                }),
+            })
+            .map_err(|err| format!("Saved Tracks update failed: {err}"));
+            *SAVED_TRACK_RESULT
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+                .expect("qt saved track result lock poisoned") = Some((track_id, result));
+        });
+    }
+
+    fn sync_now_playing_saved(mut self: Pin<&mut Self>, track_id: &str) {
+        if track_id.is_empty() {
+            self.as_mut().set_saved_track_id(QString::from(""));
+            self.as_mut().set_now_playing_saved(false);
+            self.as_mut().set_now_playing_saved_busy(false);
+            return;
+        }
+        if self.saved_track_id().to_string() == track_id {
+            return;
+        }
+
+        self.as_mut().set_saved_track_id(QString::from(track_id));
+        self.as_mut().set_now_playing_saved(false);
+        self.as_mut().set_now_playing_saved_busy(true);
+        let track_id = track_id.to_string();
+        thread::spawn(move || {
+            let result = WebApi::global()
+                .is_track_saved(&track_id)
+                .map(|saved| SavedTrackResult {
+                    saved,
+                    status: None,
+                })
+                .map_err(|err| format!("Saved Tracks check failed: {err}"));
+            *SAVED_TRACK_RESULT
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+                .expect("qt saved track result lock poisoned") = Some((track_id, result));
+        });
+    }
+
+    fn poll_saved_track_result(mut self: Pin<&mut Self>) {
+        let result = SAVED_TRACK_RESULT
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .expect("qt saved track result lock poisoned")
+            .take();
+
+        if let Some((track_id, result)) = result
+            && track_id == self.saved_track_id().to_string()
+        {
+            self.as_mut().set_now_playing_saved_busy(false);
+            match result {
+                Ok(result) => {
+                    self.as_mut().set_now_playing_saved(result.saved);
+                    if let Some(status) = result.status {
+                        self.as_mut().set_playback_status(QString::from(&status));
+                    }
+                }
+                Err(status) => {
+                    self.as_mut().set_playback_status(QString::from(&status));
+                }
+            }
+        }
     }
 
     pub fn seek_playback(mut self: Pin<&mut Self>, progress_ratio: f64) {
@@ -1841,6 +2036,111 @@ fn format_bytes(bytes: u64) -> String {
     } else {
         format!("{size:.1} {}", UNITS[unit])
     }
+}
+
+fn album_art_to_ascii(url: &str) -> Result<String, String> {
+    let response = ureq::get(url).call().map_err(|err| err.to_string())?;
+    let mut reader = response.into_body().into_reader();
+    let mut body = Vec::new();
+    reader
+        .read_to_end(&mut body)
+        .map_err(|err| err.to_string())?;
+
+    let image = image::load_from_memory(&body).map_err(|err| err.to_string())?;
+    let config = AsciiConfigBuilder::new()
+        .target(TargetType::HtmlFile)
+        .dimension(ResizingDimension::Width)
+        .target_size(NonZeroU32::new(50).expect("non-zero ASCII art width"))
+        .scale(0.55)
+        .color(true)
+        .background_color(false)
+        .characters("MWNXK0Okxdolc:;,'...   ".to_string())
+        .build();
+    Ok(extract_artem_pre(&artem::convert(image, &config)))
+}
+
+fn ascii_art_placeholder() -> &'static str {
+    "<pre style=\"color:#00ff87\">\
+   ............................................   \n\
+   ...............:-=++++++++=-:...............   \n\
+   ............:=++++++++++++++++=:............   \n\
+   ..........-++++=-:........:-=++++-..........   \n\
+   ........=+++=:................:=+++=........   \n\
+   ......:+++=......................=+++:......   \n\
+   .....=+++.........:------:.........+++=.....   \n\
+   ....=++=........./  SPOTIX \\........=++=....   \n\
+   ...:+++:.........\\  MUSIC  /........:+++:...   \n\
+   ...=++=...........:------:..........=++=...   \n\
+   ...=++=.............................=++=...   \n\
+   ...:+++:...........................:+++:...   \n\
+   ....=++=.........................=++=....   \n\
+   .....=+++.......................+++=.....   \n\
+   ......:+++=...................=+++:......   \n\
+   ........=+++=:.............:=+++=........   \n\
+   ..........-++++=-:.....:-=++++-..........   \n\
+   ............:=++++++++++++++++=:............   \n\
+   ...............:-=++++++++=-:...............   \n\
+   ............................................   \n\
+   ................ select a track .............   \n\
+   ............................................   </pre>"
+}
+
+fn ascii_art_loading() -> &'static str {
+    "<pre style=\"color:#3daee9\">\
+   ............................................   \n\
+   ...............:-=++++++++=-:...............   \n\
+   ............:=++++++++++++++++=:............   \n\
+   ..........-++++=-:........:-=++++-..........   \n\
+   ........=+++=:................:=+++=........   \n\
+   ......:+++=......................=+++:......   \n\
+   .....=+++..........................+++=.....   \n\
+   ....=++=......... loading art ......=++=....   \n\
+   ...:+++:..........................:+++:...   \n\
+   ...=++=..........[======>---]......=++=...   \n\
+   ...=++=...........................=++=...   \n\
+   ...:+++:..........................:+++:...   \n\
+   ....=++=.........................=++=....   \n\
+   .....=+++.......................+++=.....   \n\
+   ......:+++=...................=+++:......   \n\
+   ........=+++=:.............:=+++=........   \n\
+   ..........-++++=-:.....:-=++++-..........   \n\
+   ............:=++++++++++++++++=:............   \n\
+   ...............:-=++++++++=-:...............   \n\
+   ............................................   \n\
+   ............................................   \n\
+   ............................................   </pre>"
+}
+
+fn ascii_art_error(err: &str) -> String {
+    format!(
+        "<pre style=\"color:#ffd75f\">\
+##################################\n\
+#      album art unavailable     #\n\
+# {:<28} #\n\
+##################################\n\
+\n\
+\n\
+\n\
+\n\
+\n\
+\n\
+\n\
+\n\
+\n\
+\n\
+\n\
+</pre>",
+        err.chars().take(28).collect::<String>()
+    )
+}
+
+fn extract_artem_pre(html: &str) -> String {
+    let content = html
+        .split("<pre>")
+        .nth(1)
+        .and_then(|rest| rest.split("</pre>").next())
+        .unwrap_or(html);
+    format!("<pre>{content}</pre>")
 }
 
 fn parse_json_array<T: serde::de::DeserializeOwned>(json: &str) -> Vec<T> {

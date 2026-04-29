@@ -1988,6 +1988,18 @@ impl WebApi {
         Ok(())
     }
 
+    // https://developer.spotify.com/documentation/web-api/reference/check-users-saved-tracks/
+    pub fn is_track_saved(&self, id: &str) -> Result<bool, Error> {
+        let request =
+            &RequestBuilder::new("v1/me/tracks/contains", Method::Get, None).query("ids", id);
+        let response = self.request(request)?;
+        let mut reader = response.into_body().into_reader();
+        let mut body = Vec::new();
+        reader.read_to_end(&mut body)?;
+        let saved = serde_json::from_slice::<Vec<bool>>(&body)?;
+        Ok(saved.first().copied().unwrap_or(false))
+    }
+
     // https://developer.spotify.com/documentation/web-api/reference/remove-tracks-user/
     pub fn unsave_track(&self, id: &str) -> Result<(), Error> {
         let request = &RequestBuilder::new("v1/me/tracks", Method::Delete, None).query("ids", id);

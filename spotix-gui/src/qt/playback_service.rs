@@ -11,7 +11,7 @@ use spotix_core::{
     cache::Cache,
     cdn::Cdn,
     item_id::{ItemId, ItemIdType},
-    player::{Player, PlayerCommand, PlayerEvent, item::PlaybackItem},
+    player::{Player, PlayerCommand, PlayerEvent, item::PlaybackItem, queue::QueueBehavior},
     session::SessionService,
 };
 
@@ -26,9 +26,12 @@ pub struct PlaybackSnapshot {
     pub title: String,
     pub artist: String,
     pub album: String,
+    pub track_id: String,
+    pub image_url: String,
     pub progress: Duration,
     pub duration: Duration,
     pub volume: f64,
+    pub shuffle: bool,
     pub queue_summary: String,
     pub status: String,
 }
@@ -40,9 +43,12 @@ impl Default for PlaybackSnapshot {
             title: "Nothing playing".to_string(),
             artist: "Select a track to start playback".to_string(),
             album: String::new(),
+            track_id: String::new(),
+            image_url: String::new(),
             progress: Duration::ZERO,
             duration: Duration::ZERO,
             volume: 1.0,
+            shuffle: false,
             queue_summary: "Queue is empty".to_string(),
             status: "Playback service is idle".to_string(),
         }
@@ -75,6 +81,7 @@ struct TrackMetadata {
     title: String,
     artist: String,
     album: String,
+    image_url: String,
     duration: Duration,
 }
 
@@ -145,6 +152,10 @@ pub fn next() {
 
 pub fn stop() {
     send(PlayerCommand::Stop);
+}
+
+pub fn toggle_shuffle() -> bool {
+    with_service(|service| service.toggle_shuffle()).unwrap_or(false)
 }
 
 pub fn seek(progress_ratio: f64) {
@@ -285,6 +296,30 @@ impl QtPlaybackService {
         }
     }
 
+    fn toggle_shuffle(&self) -> bool {
+        let shuffle = {
+            let mut snapshot = self
+                .snapshot
+                .lock()
+                .expect("qt playback snapshot lock poisoned");
+            snapshot.shuffle = !snapshot.shuffle;
+            snapshot.status = if snapshot.shuffle {
+                "Shuffle enabled".to_string()
+            } else {
+                "Shuffle disabled".to_string()
+            };
+            snapshot.shuffle
+        };
+        self.send(PlayerCommand::SetQueueBehavior {
+            behavior: if shuffle {
+                QueueBehavior::Random
+            } else {
+                QueueBehavior::Sequential
+            },
+        });
+        shuffle
+    }
+
     fn play_tracks(&self, tracks: Vec<Arc<Track>>, position: usize) -> Result<String, String> {
         if tracks.is_empty() {
             return Err("No tracks to play".to_string());
@@ -303,6 +338,7 @@ impl QtPlaybackService {
                         title: track.name.to_string(),
                         artist: track.artist_names(),
                         album: track.album_name().to_string(),
+                        image_url: track_image_url(track),
                         duration: track.duration,
                     },
                 );
@@ -342,6 +378,7 @@ impl QtPlaybackService {
                     title: track.name.to_string(),
                     artist: track.artist_names(),
                     album: track.album_name().to_string(),
+                    image_url: track_image_url(&track),
                     duration: track.duration,
                 },
             );
@@ -459,7 +496,13 @@ impl QtPlaybackService {
             }
             PlayerEvent::Stopped => {
                 snapshot.state = PlaybackUiState::Stopped;
+                snapshot.title = "Nothing playing".to_string();
+                snapshot.artist = "Select a track to start playback".to_string();
+                snapshot.album.clear();
+                snapshot.track_id.clear();
+                snapshot.image_url.clear();
                 snapshot.progress = Duration::ZERO;
+                snapshot.duration = Duration::ZERO;
                 snapshot.status = "Stopped".to_string();
             }
             _ => {}
@@ -471,12 +514,23 @@ impl QtPlaybackService {
         metadata: &Arc<Mutex<HashMap<ItemId, TrackMetadata>>>,
         item_id: ItemId,
     ) {
+        snapshot.track_id = item_id.to_base62();
         let metadata = metadata.lock().expect("qt playback metadata lock poisoned");
         if let Some(track) = metadata.get(&item_id) {
             snapshot.title.clone_from(&track.title);
             snapshot.artist.clone_from(&track.artist);
             snapshot.album.clone_from(&track.album);
+            snapshot.image_url.clone_from(&track.image_url);
             snapshot.duration = track.duration;
         }
     }
+}
+
+fn track_image_url(track: &Track) -> String {
+    track
+        .album
+        .as_ref()
+        .and_then(|album| album.images.front())
+        .map(|image| image.url.to_string())
+        .unwrap_or_default()
 }

@@ -330,6 +330,10 @@ ApplicationWindow {
         return "Login required"
     }
 
+    function nowPlayingText() {
+        return root.spotix.now_playing_title + " :: " + root.spotix.now_playing_artist + (root.spotix.now_playing_album.length > 0 ? " / " + root.spotix.now_playing_album : "")
+    }
+
     Timer {
         interval: 500
         running: true
@@ -804,7 +808,7 @@ ApplicationWindow {
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 138
+                Layout.preferredHeight: 232
                 color: "#071013"
                 border.color: kdeBlue
                 border.width: 1
@@ -824,6 +828,7 @@ ApplicationWindow {
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 10
+                    anchors.rightMargin: artBox.width + 20
                     spacing: 7
 
                     RowLayout {
@@ -851,21 +856,67 @@ ApplicationWindow {
                                     font.bold: true
                                 }
 
-                                Label {
+                                Item {
                                     Layout.fillWidth: true
-                                    text: root.spotix.now_playing_title + " :: " + root.spotix.now_playing_artist + (root.spotix.now_playing_album.length > 0 ? " / " + root.spotix.now_playing_album : "")
-                                    color: textColor
-                                    elide: Text.ElideRight
-                                    font.family: "monospace"
-                                    font.pixelSize: 14
-                                    font.bold: true
+                                    Layout.fillHeight: true
+                                    clip: true
+
+                                    Label {
+                                        id: nowPlayingLabel
+                                        y: Math.round((parent.height - height) / 2)
+                                        x: nowPlayingLabel.width > parent.width ? -nowPlayingScroll.offset : 0
+                                        text: root.nowPlayingText()
+                                        color: textColor
+                                        font.family: "monospace"
+                                        font.pixelSize: 14
+                                        font.bold: true
+                                    }
+
+                                    Timer {
+                                        id: nowPlayingScroll
+                                        property real offset: 0
+                                        interval: 80
+                                        running: nowPlayingLabel.width > parent.width
+                                        repeat: true
+                                        onTriggered: {
+                                            var overflow = nowPlayingLabel.width - parent.width
+                                            offset = overflow <= 0 ? 0 : (offset + 1) % (overflow + 48)
+                                        }
+                                        onRunningChanged: {
+                                            if (!running) {
+                                                offset = 0
+                                            }
+                                        }
+                                    }
                                 }
 
-                                Label {
-                                    text: root.spotix.authenticated ? "Connected" : "Login required"
-                                    color: root.spotix.authenticated ? accent : warn
-                                    font.family: "monospace"
-                                    font.pixelSize: 12
+                                Rectangle {
+                                    Layout.preferredWidth: 48
+                                    Layout.preferredHeight: 24
+                                    color: savedMouse.containsMouse ? "#10262b" : "#081113"
+                                    border.color: root.spotix.now_playing_saved ? accent : mutedText
+                                    border.width: 1
+                                    opacity: root.spotix.saved_track_id.length > 0 ? 1.0 : 0.45
+
+                                    Label {
+                                        anchors.centerIn: parent
+                                        text: root.spotix.now_playing_saved_busy ? "[..]" : (root.spotix.now_playing_saved ? "[x]" : "[ ]")
+                                        color: root.spotix.now_playing_saved ? accent : textColor
+                                        font.family: "monospace"
+                                        font.pixelSize: 12
+                                        font.bold: true
+                                    }
+
+                                    MouseArea {
+                                        id: savedMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        enabled: root.spotix.saved_track_id.length > 0 && !root.spotix.now_playing_saved_busy
+                                        onClicked: {
+                                            root.spotix.toggleNowPlayingSaved()
+                                            keyboardRoot.forceActiveFocus()
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -873,9 +924,9 @@ ApplicationWindow {
                         Repeater {
                             model: [
                                 { label: "prev", command: "previous" },
-                                { label: root.spotix.playback_state === "Playing" ? "pause" : "play", command: "toggle" },
+                                { label: root.spotix.playback_state === "Playing" ? "||" : ">", command: "toggle" },
                                 { label: "next", command: "next" },
-                                { label: "stop", command: "stop" }
+                                { label: root.spotix.shuffle_enabled ? "shuffle*" : "shuffle", command: "shuffle" }
                             ]
 
                             delegate: Rectangle {
@@ -888,7 +939,7 @@ ApplicationWindow {
                                 Label {
                                     anchors.centerIn: parent
                                     text: modelData.label
-                                    color: controlMouse.containsMouse ? accent : textColor
+                                    color: modelData.command === "toggle" ? error : (controlMouse.containsMouse ? accent : textColor)
                                     font.family: "monospace"
                                     font.pixelSize: 13
                                     font.bold: true
@@ -905,8 +956,8 @@ ApplicationWindow {
                                             root.spotix.playPause()
                                         } else if (modelData.command === "next") {
                                             root.spotix.playNext()
-                                        } else {
-                                            root.spotix.stopPlayback()
+                                        } else if (modelData.command === "shuffle") {
+                                            root.spotix.toggleShuffle()
                                         }
                                         keyboardRoot.forceActiveFocus()
                                     }
@@ -927,34 +978,15 @@ ApplicationWindow {
                             font.bold: true
                         }
 
-                        Rectangle {
+                        Label {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 18
-                            color: "#050909"
-                            border.color: kdeBlue
-                            border.width: 1
+                            text: root.terminalBar(root.progressRatio(), Math.max(12, Math.floor(width / 8) - 6), ">") + " " + Math.floor(root.progressRatio() * 100) + "%"
+                            color: kdeBlue
                             clip: true
-
-                            Rectangle {
-                                anchors.left: parent.left
-                                anchors.top: parent.top
-                                anchors.bottom: parent.bottom
-                                anchors.margins: 2
-                                width: Math.max(0, (parent.width - 4) * root.progressRatio())
-                                color: kdeBlue
-                                opacity: 0.72
-                            }
-
-                            Label {
-                                anchors.left: parent.left
-                                anchors.leftMargin: Math.max(4, Math.min(parent.width - width - 4, (parent.width - 4) * root.progressRatio() - width / 2))
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: ">"
-                                color: textColor
-                                font.family: "monospace"
-                                font.pixelSize: 12
-                                font.bold: true
-                            }
+                            horizontalAlignment: Text.AlignLeft
+                            font.family: "monospace"
+                            font.pixelSize: 13
+                            font.bold: true
 
                             MouseArea {
                                 anchors.fill: parent
@@ -975,10 +1007,6 @@ ApplicationWindow {
                             font.pixelSize: 12
                         }
 
-                        Item {
-                            Layout.fillWidth: true
-                        }
-
                         Label {
                             text: "Volume"
                             color: cyan
@@ -987,23 +1015,15 @@ ApplicationWindow {
                             font.bold: true
                         }
 
-                        Rectangle {
+                        Label {
                             Layout.preferredWidth: 180
-                            Layout.preferredHeight: 16
-                            color: "#050909"
-                            border.color: cyan
-                            border.width: 1
+                            text: root.terminalBar(root.spotix.volume, Math.max(8, Math.floor(width / 8) - 1), "|")
+                            color: cyan
                             clip: true
-
-                            Rectangle {
-                                anchors.left: parent.left
-                                anchors.top: parent.top
-                                anchors.bottom: parent.bottom
-                                anchors.margins: 2
-                                width: Math.max(0, (parent.width - 4) * Math.max(0, Math.min(1, root.spotix.volume)))
-                                color: cyan
-                                opacity: 0.68
-                            }
+                            horizontalAlignment: Text.AlignLeft
+                            font.family: "monospace"
+                            font.pixelSize: 12
+                            font.bold: true
 
                             MouseArea {
                                 anchors.fill: parent
@@ -1048,6 +1068,34 @@ ApplicationWindow {
                             font.family: "monospace"
                             font.pixelSize: 12
                         }
+                    }
+                }
+
+                Rectangle {
+                    id: artBox
+                    anchors.top: parent.top
+                    anchors.right: parent.right
+                    anchors.margins: 10
+                    width: 250
+                    height: parent.height - 20
+                    color: "#050909"
+                    border.color: borderColor
+                    border.width: 1
+
+                    Label {
+                        id: artText
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        text: root.spotix.now_playing_art_ascii
+                        textFormat: Text.RichText
+                        color: accent
+                        font.family: "monospace"
+                        font.pixelSize: 8
+                        lineHeight: 0.95
+                        elide: Text.ElideNone
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        clip: true
                     }
                 }
             }

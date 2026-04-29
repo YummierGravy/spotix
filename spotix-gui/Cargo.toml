@@ -66,6 +66,8 @@ raw-window-handle = "0.6.2" # Must stay compatible with Druid
 souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }
 sanitize_html = "0.10.0"
 rustfm-scrobble = "1.1.1"
+image = "0.25.10"
+artem = "3.0.0"
 
 [build-dependencies]
 cxx-qt-build = { version = "0.8.1", features = ["link_qt_object_files"] }

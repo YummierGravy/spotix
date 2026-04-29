@@ -12,12 +12,27 @@ ApplicationWindow {
     minimumHeight: 560
     visible: true
     title: "Spotix Qt"
-    color: "#121212"
+    color: terminalBg
 
     readonly property SpotixApp spotix: SpotixApp {}
+    property string activePane: "detail"
+    property color terminalBg: "#050505"
+    property color panelBg: "#0b0f10"
+    property color panelAlt: "#111718"
+    property color borderColor: "#2f3b3d"
+    property color textColor: "#d8dee9"
+    property color dimText: "#839496"
+    property color accent: "#00ff87"
+    property color cyan: "#00d7ff"
+    property color warn: "#ffd75f"
+    property color error: "#ff5f5f"
+    property color selection: "#183a3a"
+    property int rowHeight: 28
 
     Component.onCompleted: {
         root.spotix.refreshSession()
+        root.spotix.loadLibrary()
+        keyboardRoot.forceActiveFocus()
     }
 
     function formatTime(ms) {
@@ -35,18 +50,59 @@ ApplicationWindow {
         }
     }
 
-    function parseSearch(json) {
-        try {
-            return JSON.parse(json)
-        } catch (e) {
-            return {
-                tracks: [],
-                albums: [],
-                artists: [],
-                playlists: [],
-                shows: []
-            }
+    function currentTreeItem() {
+        var items = root.parseArray(root.spotix.nav_tree_json)
+        if (treeList.currentIndex < 0 || treeList.currentIndex >= items.length) {
+            return null
         }
+        return items[treeList.currentIndex]
+    }
+
+    function currentDetailRow() {
+        var rows = root.parseArray(root.spotix.detail_rows_json)
+        if (detailList.currentIndex < 0 || detailList.currentIndex >= rows.length) {
+            return null
+        }
+        return rows[detailList.currentIndex]
+    }
+
+    function activateCurrent() {
+        if (root.activePane === "tree") {
+            var item = root.currentTreeItem()
+            if (item && item.selectable) {
+                root.spotix.activateTreeItem(item.id)
+            }
+            return
+        }
+
+        var row = root.currentDetailRow()
+        if (!row) {
+            return
+        }
+        if (row.playable || row.kind === "album" || row.kind === "artist" || row.kind === "playlist" || row.kind === "show") {
+            root.spotix.activateDetailRow(row.id)
+        }
+    }
+
+    function moveSelection(delta) {
+        var view = root.activePane === "tree" ? treeList : detailList
+        var count = view.count
+        if (count <= 0) {
+            return
+        }
+        view.currentIndex = Math.max(0, Math.min(count - 1, view.currentIndex + delta))
+        view.positionViewAtIndex(view.currentIndex, ListView.Contain)
+    }
+
+    function depthPrefix(depth, expandable, playable) {
+        var prefix = ""
+        for (var i = 0; i < depth; i++) {
+            prefix += "  "
+        }
+        if (playable) {
+            return prefix + "> "
+        }
+        return prefix + (expandable ? "+ " : "- ")
     }
 
     Timer {
@@ -59,590 +115,359 @@ ApplicationWindow {
         }
     }
 
-    RowLayout {
+    Item {
+        id: keyboardRoot
         anchors.fill: parent
-        spacing: 0
+        focus: true
 
-        Rectangle {
-            Layout.fillHeight: true
-            Layout.preferredWidth: 240
-            color: "#000000"
-
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 24
-                spacing: 18
-
-                Label {
-                    text: "Spotix"
-                    color: "#ffffff"
-                    font.pixelSize: 28
-                    font.bold: true
-                }
-
-                Button {
-                    text: "Home"
-                    onClicked: root.spotix.goHome()
-                }
-
-                Button {
-                    text: "Library"
-                    onClicked: {
-                        root.spotix.route = "library"
-                        root.spotix.loadLibrary()
-                    }
-                }
-
-                Button {
-                    text: "Search"
-                    onClicked: root.spotix.route = "search"
-                }
-
-                Button {
-                    text: "Playlists"
-                    onClicked: root.spotix.route = "playlists"
-                }
-
-                Button {
-                    text: "Albums"
-                    onClicked: root.spotix.route = "albums"
-                }
-
-                Button {
-                    text: "Artists"
-                    onClicked: root.spotix.route = "artists"
-                }
-
-                Button {
-                    text: "Lyrics"
-                    onClicked: root.spotix.route = "lyrics"
-                }
-
-                Button {
-                    text: "Account"
-                    onClicked: root.spotix.goLogin()
-                }
-
-                Item {
-                    Layout.fillHeight: true
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    text: root.spotix.authenticated ? "Spotify credentials found" : "Login required"
-                    color: root.spotix.authenticated ? "#1ed760" : "#f0c674"
-                    wrapMode: Text.WordWrap
-                }
+        Keys.onPressed: function(event) {
+            if (searchField.activeFocus && event.key !== Qt.Key_Escape) {
+                return
+            }
+            if (event.key === Qt.Key_Down) {
+                root.moveSelection(1)
+                event.accepted = true
+            } else if (event.key === Qt.Key_Up) {
+                root.moveSelection(-1)
+                event.accepted = true
+            } else if (event.key === Qt.Key_Tab) {
+                root.activePane = root.activePane === "tree" ? "detail" : "tree"
+                event.accepted = true
+            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Right) {
+                root.activateCurrent()
+                event.accepted = true
+            } else if (event.key === Qt.Key_Left || event.key === Qt.Key_Backspace) {
+                root.spotix.navigateBack()
+                event.accepted = true
+            } else if (event.key === Qt.Key_Space) {
+                root.spotix.playPause()
+                event.accepted = true
+            } else if (event.key === Qt.Key_Slash) {
+                searchField.forceActiveFocus()
+                searchField.selectAll()
+                event.accepted = true
+            } else if (event.key === Qt.Key_R && event.modifiers & Qt.ControlModifier) {
+                root.spotix.loadLibrary()
+                root.spotix.refreshSession()
+                event.accepted = true
+            } else if (event.key === Qt.Key_Escape) {
+                keyboardRoot.forceActiveFocus()
+                event.accepted = true
             }
         }
 
         ColumnLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 0
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 8
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 76
-                color: "#181818"
+                Layout.preferredHeight: 42
+                color: panelBg
+                border.color: borderColor
+                border.width: 1
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: 24
-                    anchors.rightMargin: 24
-                    spacing: 16
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 12
+                    spacing: 10
+
+                    Label {
+                        text: "spotix@spotify:~$"
+                        color: accent
+                        font.family: "monospace"
+                        font.pixelSize: 15
+                        font.bold: true
+                    }
 
                     TextField {
                         id: searchField
                         Layout.fillWidth: true
-                        placeholderText: "Search for songs, artists, albums, playlists, or podcasts"
                         text: root.spotix.search_query
+                        placeholderText: "search tracks, artists, albums, playlists, podcasts"
+                        color: textColor
+                        placeholderTextColor: dimText
+                        selectionColor: selection
+                        selectedTextColor: textColor
+                        font.family: "monospace"
+                        font.pixelSize: 15
+                        background: Rectangle {
+                            color: "#000000"
+                            border.color: searchField.activeFocus ? accent : borderColor
+                        }
                         onTextChanged: root.spotix.search_query = text
-                        onAccepted: root.spotix.submitSearch()
+                        onAccepted: {
+                            root.spotix.navigateToRoute("search")
+                            root.spotix.submitSearch()
+                            keyboardRoot.forceActiveFocus()
+                        }
                     }
 
                     Button {
-                        text: "Search"
-                        onClicked: root.spotix.submitSearch()
-                    }
-
-                    Button {
-                        text: "Play First"
-                        onClicked: root.spotix.playFirstSearchResult()
+                        text: "run"
+                        font.family: "monospace"
+                        onClicked: {
+                            root.spotix.navigateToRoute("search")
+                            root.spotix.submitSearch()
+                            keyboardRoot.forceActiveFocus()
+                        }
                     }
                 }
             }
 
-            StackLayout {
+            RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                currentIndex: {
-                    if (root.spotix.route === "login") return 1
-                    if (root.spotix.route === "library") return 2
-                    if (root.spotix.route === "search") return 3
-                    if (root.spotix.route === "playlists") return 4
-                    if (root.spotix.route === "albums") return 5
-                    if (root.spotix.route === "artists") return 6
-                    if (root.spotix.route === "lyrics") return 7
-                    return 0
-                }
+                spacing: 8
 
                 Rectangle {
-                    color: "#121212"
-
-                    ColumnLayout {
-                        anchors.centerIn: parent
-                        width: Math.min(parent.width - 96, 760)
-                        spacing: 16
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Home"
-                            color: "#ffffff"
-                            font.pixelSize: 34
-                            font.bold: true
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: root.spotix.status
-                            color: "#b3b3b3"
-                            font.pixelSize: 16
-                            wrapMode: Text.WordWrap
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: root.spotix.search_status
-                            color: "#ffffff"
-                            font.pixelSize: 18
-                            wrapMode: Text.WordWrap
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Qt is now the primary entrypoint. Playback, search, and shell navigation are wired through the CXX-Qt bridge; remaining screens are being filled in as QML routes."
-                            color: "#b3b3b3"
-                            font.pixelSize: 16
-                            wrapMode: Text.WordWrap
-                        }
-                    }
-                }
-
-                Rectangle {
-                    color: "#121212"
-
-                    ColumnLayout {
-                        anchors.centerIn: parent
-                        width: Math.min(parent.width - 96, 560)
-                        spacing: 16
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Account setup"
-                            color: "#ffffff"
-                            font.pixelSize: 34
-                            font.bold: true
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: root.spotix.login_status
-                            color: "#b3b3b3"
-                            font.pixelSize: 16
-                            wrapMode: Text.WordWrap
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            visible: root.spotix.login_error.length > 0
-                            text: root.spotix.login_error
-                            color: "#ff6b6b"
-                            font.pixelSize: 14
-                            wrapMode: Text.WordWrap
-                        }
-
-                        RowLayout {
-                            Button {
-                                text: root.spotix.login_busy ? "Waiting for browser..." : "Login with Spotify"
-                                enabled: !root.spotix.login_busy
-                                onClicked: root.spotix.startSpotifyLogin()
-                            }
-
-                            Button {
-                                text: "Refresh"
-                                onClicked: root.spotix.refreshSession()
-                            }
-
-                            Button {
-                                text: "Logout"
-                                enabled: root.spotix.authenticated
-                                onClicked: root.spotix.logout()
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    color: "#121212"
+                    Layout.preferredWidth: 330
+                    Layout.fillHeight: true
+                    color: panelBg
+                    border.color: root.activePane === "tree" ? accent : borderColor
+                    border.width: 1
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 24
-                        spacing: 12
-
-                        RowLayout {
-                            Layout.fillWidth: true
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: "Library"
-                                color: "#ffffff"
-                                font.pixelSize: 34
-                                font.bold: true
-                            }
-
-                            Button {
-                                text: "Load Library"
-                                onClicked: root.spotix.loadLibrary()
-                            }
-                        }
+                        anchors.margins: 8
+                        spacing: 6
 
                         Label {
                             Layout.fillWidth: true
-                            text: (root.spotix.profile_name.length > 0 ? root.spotix.profile_name + " · " : "") + root.spotix.library_status
-                            color: "#b3b3b3"
-                            wrapMode: Text.WordWrap
-                        }
-
-                        TabBar {
-                            id: libraryTabs
-                            Layout.fillWidth: true
-                            TabButton { text: "Tracks" }
-                            TabButton { text: "Playlists" }
-                            TabButton { text: "Albums" }
-                            TabButton { text: "Shows" }
-                        }
-
-                        StackLayout {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            currentIndex: libraryTabs.currentIndex
-
-                            ListView {
-                                clip: true
-                                model: root.parseArray(root.spotix.saved_tracks_json)
-                                delegate: ItemDelegate {
-                                    width: ListView.view.width
-                                    text: modelData.title + " · " + modelData.artist
-                                    onClicked: root.spotix.playTrack(modelData.id)
-                                }
-                            }
-
-                            ListView {
-                                clip: true
-                                model: root.parseArray(root.spotix.playlists_json)
-                                delegate: ItemDelegate {
-                                    width: ListView.view.width
-                                    text: modelData.title + " · " + modelData.owner
-                                }
-                            }
-
-                            ListView {
-                                clip: true
-                                model: root.parseArray(root.spotix.saved_albums_json)
-                                delegate: ItemDelegate {
-                                    width: ListView.view.width
-                                    text: modelData.title + " · " + modelData.artist
-                                }
-                            }
-
-                            ListView {
-                                clip: true
-                                model: root.parseArray(root.spotix.saved_shows_json)
-                                delegate: ItemDelegate {
-                                    width: ListView.view.width
-                                    text: modelData.title + " · " + modelData.publisher
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    color: "#121212"
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 24
-                        spacing: 12
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Search"
-                            color: "#ffffff"
-                            font.pixelSize: 34
-                            font.bold: true
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: root.spotix.search_status
-                            color: "#b3b3b3"
-                            wrapMode: Text.WordWrap
-                        }
-
-                        TabBar {
-                            id: searchTabs
-                            Layout.fillWidth: true
-                            TabButton { text: "Tracks" }
-                            TabButton { text: "Albums" }
-                            TabButton { text: "Artists" }
-                            TabButton { text: "Playlists" }
-                            TabButton { text: "Podcasts" }
-                        }
-
-                        StackLayout {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            currentIndex: searchTabs.currentIndex
-
-                            ListView {
-                                clip: true
-                                model: root.parseSearch(root.spotix.search_results_json).tracks
-                                delegate: ItemDelegate {
-                                    width: ListView.view.width
-                                    text: modelData.title + " · " + modelData.artist + " · " + modelData.album
-                                    onClicked: root.spotix.playTrack(modelData.id)
-                                }
-                            }
-
-                            ListView {
-                                clip: true
-                                model: root.parseSearch(root.spotix.search_results_json).albums
-                                delegate: ItemDelegate {
-                                    width: ListView.view.width
-                                    text: modelData.title + " · " + modelData.artist
-                                }
-                            }
-
-                            ListView {
-                                clip: true
-                                model: root.parseSearch(root.spotix.search_results_json).artists
-                                delegate: ItemDelegate {
-                                    width: ListView.view.width
-                                    text: modelData.name
-                                }
-                            }
-
-                            ListView {
-                                clip: true
-                                model: root.parseSearch(root.spotix.search_results_json).playlists
-                                delegate: ItemDelegate {
-                                    width: ListView.view.width
-                                    text: modelData.title + " · " + modelData.owner
-                                }
-                            }
-
-                            ListView {
-                                clip: true
-                                model: root.parseSearch(root.spotix.search_results_json).shows
-                                delegate: ItemDelegate {
-                                    width: ListView.view.width
-                                    text: modelData.title + " · " + modelData.publisher
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    color: "#121212"
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 24
-                        spacing: 12
-
-                        Label {
-                            text: "Playlists"
-                            color: "#ffffff"
-                            font.pixelSize: 34
+                            text: "TREE"
+                            color: cyan
+                            font.family: "monospace"
+                            font.pixelSize: 13
                             font.bold: true
                         }
 
                         ListView {
+                            id: treeList
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
-                            model: root.parseArray(root.spotix.playlists_json)
-                            delegate: ItemDelegate {
-                                width: ListView.view.width
-                                text: modelData.title + " · " + modelData.owner
+                            currentIndex: 0
+                            model: root.parseArray(root.spotix.nav_tree_json)
+                            boundsBehavior: Flickable.StopAtBounds
+
+                            delegate: Rectangle {
+                                width: treeList.width
+                                height: rowHeight
+                                color: ListView.isCurrentItem && root.activePane === "tree" ? selection : "transparent"
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 6
+                                    anchors.rightMargin: 6
+                                    spacing: 8
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: root.depthPrefix(modelData.depth, modelData.expanded, modelData.playable) + modelData.label
+                                        color: ListView.isCurrentItem ? accent : textColor
+                                        elide: Text.ElideRight
+                                        font.family: "monospace"
+                                        font.pixelSize: 14
+                                    }
+
+                                    Label {
+                                        text: modelData.meta
+                                        color: dimText
+                                        elide: Text.ElideRight
+                                        font.family: "monospace"
+                                        font.pixelSize: 12
+                                    }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: {
+                                        root.activePane = "tree"
+                                        treeList.currentIndex = index
+                                        root.spotix.activateTreeItem(modelData.id)
+                                        keyboardRoot.forceActiveFocus()
+                                    }
+                                }
                             }
                         }
                     }
                 }
 
                 Rectangle {
-                    color: "#121212"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    color: panelBg
+                    border.color: root.activePane === "detail" ? accent : borderColor
+                    border.width: 1
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 24
-                        spacing: 12
+                        anchors.margins: 8
+                        spacing: 6
 
-                        Label {
-                            text: "Albums"
-                            color: "#ffffff"
-                            font.pixelSize: 34
-                            font.bold: true
-                        }
-
-                        ListView {
+                        RowLayout {
                             Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            clip: true
-                            model: root.parseArray(root.spotix.saved_albums_json)
-                            delegate: ItemDelegate {
-                                width: ListView.view.width
-                                text: modelData.title + " · " + modelData.artist
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    color: "#121212"
-
-                    ColumnLayout {
-                        anchors.centerIn: parent
-                        width: Math.min(parent.width - 96, 760)
-                        spacing: 16
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Artists"
-                            color: "#ffffff"
-                            font.pixelSize: 34
-                            font.bold: true
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Artist profile/detail routes are next; search results already list artists from Spotify."
-                            color: "#b3b3b3"
-                            wrapMode: Text.WordWrap
-                        }
-                    }
-                }
-
-                Rectangle {
-                    color: "#121212"
-
-                    ColumnLayout {
-                        anchors.centerIn: parent
-                        width: Math.min(parent.width - 96, 760)
-                        spacing: 16
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Lyrics"
-                            color: "#ffffff"
-                            font.pixelSize: 34
-                            font.bold: true
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Lyrics, artwork-derived colors, credits, and fullscreen artwork remain parity work after the data-loading path stabilizes."
-                            color: "#b3b3b3"
-                            wrapMode: Text.WordWrap
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 132
-                color: "#181818"
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 16
-                    spacing: 8
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 16
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
+                            spacing: 8
 
                             Label {
                                 Layout.fillWidth: true
-                                text: root.spotix.now_playing_title
-                                color: "#ffffff"
+                                text: root.spotix.active_route_title
+                                color: accent
+                                font.family: "monospace"
                                 font.pixelSize: 18
                                 font.bold: true
                                 elide: Text.ElideRight
                             }
 
                             Label {
-                                Layout.fillWidth: true
-                                text: root.spotix.now_playing_artist + (root.spotix.now_playing_album.length > 0 ? " - " + root.spotix.now_playing_album : "")
-                                color: "#b3b3b3"
+                                text: root.spotix.authenticated ? "ONLINE" : "LOGIN"
+                                color: root.spotix.authenticated ? accent : warn
+                                font.family: "monospace"
                                 font.pixelSize: 13
-                                elide: Text.ElideRight
-                            }
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: root.spotix.playback_status + " · " + root.spotix.queue_summary
-                                color: "#7f7f7f"
-                                font.pixelSize: 12
-                                elide: Text.ElideRight
                             }
                         }
 
-                        Button {
-                            text: "Previous"
-                            onClicked: root.spotix.playPrevious()
+                        Label {
+                            Layout.fillWidth: true
+                            text: root.spotix.detail_status
+                            color: dimText
+                            wrapMode: Text.WordWrap
+                            font.family: "monospace"
+                            font.pixelSize: 13
                         }
 
-                        Button {
-                            text: root.spotix.playback_state === "Playing" ? "Pause" : "Play"
-                            onClicked: root.spotix.playPause()
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 1
+                            color: borderColor
                         }
 
-                        Button {
-                            text: "Next"
-                            onClicked: root.spotix.playNext()
-                        }
+                        ListView {
+                            id: detailList
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            currentIndex: 0
+                            model: root.parseArray(root.spotix.detail_rows_json)
+                            boundsBehavior: Flickable.StopAtBounds
 
-                        Button {
-                            text: "Stop"
-                            onClicked: root.spotix.stopPlayback()
-                        }
+                            delegate: Rectangle {
+                                width: detailList.width
+                                height: rowHeight
+                                color: ListView.isCurrentItem && root.activePane === "detail" ? selection : "transparent"
 
-                        Slider {
-                            Layout.preferredWidth: 140
-                            from: 0
-                            to: 1
-                            value: root.spotix.volume
-                            onMoved: root.spotix.setPlaybackVolume(value)
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 6
+                                    anchors.rightMargin: 6
+                                    spacing: 12
+
+                                    Label {
+                                        Layout.preferredWidth: 92
+                                        text: "[" + modelData.kind + "]"
+                                        color: modelData.playable ? accent : cyan
+                                        elide: Text.ElideRight
+                                        font.family: "monospace"
+                                        font.pixelSize: 12
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: root.depthPrefix(modelData.depth, modelData.expandable, modelData.playable) + modelData.label
+                                        color: ListView.isCurrentItem ? accent : textColor
+                                        elide: Text.ElideRight
+                                        font.family: "monospace"
+                                        font.pixelSize: 14
+                                    }
+
+                                    Label {
+                                        Layout.preferredWidth: 260
+                                        text: modelData.meta
+                                        color: dimText
+                                        elide: Text.ElideRight
+                                        font.family: "monospace"
+                                        font.pixelSize: 12
+                                    }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: {
+                                        root.activePane = "detail"
+                                        detailList.currentIndex = index
+                                        if (modelData.playable || modelData.kind === "album" || modelData.kind === "artist" || modelData.kind === "playlist" || modelData.kind === "show") {
+                                            root.spotix.activateDetailRow(modelData.id)
+                                        }
+                                        keyboardRoot.forceActiveFocus()
+                                    }
+                                }
+                            }
                         }
                     }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 118
+                color: panelAlt
+                border.color: borderColor
+                border.width: 1
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 6
 
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 12
 
                         Label {
+                            Layout.fillWidth: true
+                            text: "now-playing: " + root.spotix.now_playing_title + " | " + root.spotix.now_playing_artist
+                            color: textColor
+                            elide: Text.ElideRight
+                            font.family: "monospace"
+                            font.pixelSize: 14
+                            font.bold: true
+                        }
+
+                        Button {
+                            text: "prev"
+                            font.family: "monospace"
+                            onClicked: root.spotix.playPrevious()
+                        }
+
+                        Button {
+                            text: root.spotix.playback_state === "Playing" ? "pause" : "play"
+                            font.family: "monospace"
+                            onClicked: root.spotix.playPause()
+                        }
+
+                        Button {
+                            text: "next"
+                            font.family: "monospace"
+                            onClicked: root.spotix.playNext()
+                        }
+
+                        Button {
+                            text: "stop"
+                            font.family: "monospace"
+                            onClicked: root.spotix.stopPlayback()
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        Label {
                             text: root.formatTime(root.spotix.playback_progress_ms)
-                            color: "#b3b3b3"
+                            color: dimText
+                            font.family: "monospace"
                             font.pixelSize: 12
                         }
 
@@ -656,9 +481,36 @@ ApplicationWindow {
 
                         Label {
                             text: root.formatTime(root.spotix.playback_duration_ms)
-                            color: "#b3b3b3"
+                            color: dimText
+                            font.family: "monospace"
                             font.pixelSize: 12
                         }
+
+                        Slider {
+                            Layout.preferredWidth: 110
+                            from: 0
+                            to: 1
+                            value: root.spotix.volume
+                            onMoved: root.spotix.setPlaybackVolume(value)
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "keys: tab pane | arrows move | enter/right open | left/backspace back | space play/pause | / search | ctrl+r reload"
+                        color: dimText
+                        elide: Text.ElideRight
+                        font.family: "monospace"
+                        font.pixelSize: 12
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.spotix.playback_status + " | " + root.spotix.queue_summary
+                        color: root.spotix.playback_state === "Blocked" ? warn : dimText
+                        elide: Text.ElideRight
+                        font.family: "monospace"
+                        font.pixelSize: 12
                     }
                 }
             }

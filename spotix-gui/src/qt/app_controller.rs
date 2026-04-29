@@ -14,9 +14,12 @@ use spotix_core::{
 };
 
 use crate::{
-    data::{Config, SearchTopic},
+    data::{Config, SearchTopic, Track},
     qt::{
-        models::{QtAlbum, QtPlaylist, QtSearchResults, QtShow, QtTrack},
+        models::{
+            QtAlbum, QtDetailRow, QtNavDocument, QtPlaylist, QtSearchResults, QtShow, QtTrack,
+            QtTreeItem,
+        },
         playback_service, runtime,
     },
     webapi::WebApi,
@@ -45,6 +48,8 @@ static STARTUP_STATE: OnceLock<Mutex<StartupState>> = OnceLock::new();
 static LOGIN_RESULT: OnceLock<Mutex<Option<Result<SpotifyAuthResult, String>>>> = OnceLock::new();
 static LIBRARY_RESULT: OnceLock<Mutex<Option<Result<LibraryJson, String>>>> = OnceLock::new();
 static SEARCH_RESULT: OnceLock<Mutex<Option<Result<QtSearchResults, String>>>> = OnceLock::new();
+static NAV_RESULT: OnceLock<Mutex<Option<Result<QtNavPayload, String>>>> = OnceLock::new();
+static NAV_STATE: OnceLock<Mutex<QtNavState>> = OnceLock::new();
 static PLAYBACK_CONFIGURED: OnceLock<Mutex<bool>> = OnceLock::new();
 
 pub fn set_startup_state(authenticated: bool, session_configured: bool) {
@@ -70,6 +75,127 @@ pub fn set_startup_state(authenticated: bool, session_configured: bool) {
 struct SpotifyAuthResult {
     credentials: Option<Credentials>,
     oauth_token: OAuthToken,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum QtNavTarget {
+    Home,
+    Login,
+    Library,
+    SavedTracks,
+    Playlists,
+    SavedAlbums,
+    Artists,
+    Shows,
+    Search,
+    Lyrics,
+    Playlist { id: String, name: String },
+    Album { id: String, name: String },
+    Artist { id: String, name: String },
+    Show { id: String, name: String },
+}
+
+impl QtNavTarget {
+    fn from_item_id(id: &str) -> Option<Self> {
+        match id {
+            "route:home" | "home" => Some(Self::Home),
+            "route:login" | "login" | "account" => Some(Self::Login),
+            "route:library" | "library" => Some(Self::Library),
+            "route:saved-tracks" | "saved-tracks" | "tracks" => Some(Self::SavedTracks),
+            "route:playlists" | "playlists" => Some(Self::Playlists),
+            "route:saved-albums" | "saved-albums" | "albums" => Some(Self::SavedAlbums),
+            "route:artists" | "artists" => Some(Self::Artists),
+            "route:shows" | "shows" => Some(Self::Shows),
+            "route:search" | "search" => Some(Self::Search),
+            "route:lyrics" | "lyrics" => Some(Self::Lyrics),
+            _ => {
+                let (kind, spotify_id) = id.split_once(':')?;
+                if spotify_id.is_empty() {
+                    return None;
+                }
+                let name = spotify_id.to_string();
+                match kind {
+                    "playlist" => Some(Self::Playlist {
+                        id: spotify_id.to_string(),
+                        name,
+                    }),
+                    "album" => Some(Self::Album {
+                        id: spotify_id.to_string(),
+                        name,
+                    }),
+                    "artist" => Some(Self::Artist {
+                        id: spotify_id.to_string(),
+                        name,
+                    }),
+                    "show" => Some(Self::Show {
+                        id: spotify_id.to_string(),
+                        name,
+                    }),
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    fn route(&self) -> &'static str {
+        match self {
+            Self::Home => "home",
+            Self::Login => "login",
+            Self::Library => "library",
+            Self::SavedTracks => "saved-tracks",
+            Self::Playlists => "playlists",
+            Self::SavedAlbums => "saved-albums",
+            Self::Artists => "artists",
+            Self::Shows => "shows",
+            Self::Search => "search",
+            Self::Lyrics => "lyrics",
+            Self::Playlist { .. } => "playlist-detail",
+            Self::Album { .. } => "album-detail",
+            Self::Artist { .. } => "artist-detail",
+            Self::Show { .. } => "show-detail",
+        }
+    }
+
+    fn title(&self) -> String {
+        match self {
+            Self::Home => "Home".to_string(),
+            Self::Login => "Account".to_string(),
+            Self::Library => "Library".to_string(),
+            Self::SavedTracks => "Saved Tracks".to_string(),
+            Self::Playlists => "Playlists".to_string(),
+            Self::SavedAlbums => "Albums".to_string(),
+            Self::Artists => "Artists".to_string(),
+            Self::Shows => "Podcasts".to_string(),
+            Self::Search => "Search".to_string(),
+            Self::Lyrics => "Lyrics".to_string(),
+            Self::Playlist { name, .. }
+            | Self::Album { name, .. }
+            | Self::Artist { name, .. }
+            | Self::Show { name, .. } => name.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct QtNavState {
+    current: QtNavTarget,
+    history: Vec<QtNavTarget>,
+}
+
+impl Default for QtNavState {
+    fn default() -> Self {
+        let startup = startup_state();
+        Self {
+            current: QtNavTarget::from_item_id(&startup.route).unwrap_or(QtNavTarget::Login),
+            history: Vec::new(),
+        }
+    }
+}
+
+struct QtNavPayload {
+    target: QtNavTarget,
+    document: QtNavDocument,
+    tracks_for_playback: Vec<Arc<Track>>,
 }
 
 fn startup_state() -> StartupState {
@@ -105,6 +231,10 @@ pub mod qobject {
         #[qproperty(QString, saved_tracks_json)]
         #[qproperty(QString, saved_albums_json)]
         #[qproperty(QString, saved_shows_json)]
+        #[qproperty(QString, nav_tree_json)]
+        #[qproperty(QString, active_route_title)]
+        #[qproperty(QString, detail_rows_json)]
+        #[qproperty(QString, detail_status)]
         #[qproperty(QString, playback_state)]
         #[qproperty(QString, now_playing_title)]
         #[qproperty(QString, now_playing_artist)]
@@ -180,6 +310,38 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "setPlaybackVolume"]
         fn set_playback_volume(self: Pin<&mut Self>, volume: f64);
+
+        #[qinvokable]
+        #[cxx_name = "navigateToRoute"]
+        fn navigate_to_route(self: Pin<&mut Self>, route: &QString);
+
+        #[qinvokable]
+        #[cxx_name = "navigateBack"]
+        fn navigate_back(self: Pin<&mut Self>);
+
+        #[qinvokable]
+        #[cxx_name = "activateTreeItem"]
+        fn activate_tree_item(self: Pin<&mut Self>, item_id: &QString);
+
+        #[qinvokable]
+        #[cxx_name = "activateDetailRow"]
+        fn activate_detail_row(self: Pin<&mut Self>, row_id: &QString);
+
+        #[qinvokable]
+        #[cxx_name = "openAlbum"]
+        fn open_album(self: Pin<&mut Self>, id: &QString, name: &QString);
+
+        #[qinvokable]
+        #[cxx_name = "openArtist"]
+        fn open_artist(self: Pin<&mut Self>, id: &QString, name: &QString);
+
+        #[qinvokable]
+        #[cxx_name = "openPlaylist"]
+        fn open_playlist(self: Pin<&mut Self>, id: &QString, name: &QString);
+
+        #[qinvokable]
+        #[cxx_name = "openShow"]
+        fn open_show(self: Pin<&mut Self>, id: &QString, name: &QString);
     }
 }
 
@@ -199,6 +361,10 @@ pub struct SpotixAppRust {
     saved_tracks_json: QString,
     saved_albums_json: QString,
     saved_shows_json: QString,
+    nav_tree_json: QString,
+    active_route_title: QString,
+    detail_rows_json: QString,
+    detail_status: QString,
     playback_state: QString,
     now_playing_title: QString,
     now_playing_artist: QString,
@@ -214,6 +380,13 @@ impl Default for SpotixAppRust {
     fn default() -> Self {
         let startup = startup_state();
         let playback = playback_service::snapshot();
+        let nav_state = QtNavState::default();
+        set_nav_state(nav_state.clone());
+        let initial_detail = QtNavDocument {
+            title: nav_state.current.title(),
+            status: "Use the tree or keyboard shortcuts to navigate Spotix.".to_string(),
+            rows: home_rows(&startup.status),
+        };
         Self {
             authenticated: startup.authenticated,
             status: QString::from(&startup.status),
@@ -238,6 +411,15 @@ impl Default for SpotixAppRust {
             saved_tracks_json: QString::from("[]"),
             saved_albums_json: QString::from("[]"),
             saved_shows_json: QString::from("[]"),
+            nav_tree_json: QString::from(&json_or_empty_array(&nav_tree(
+                &nav_state,
+                &[],
+                &[],
+                &[],
+            ))),
+            active_route_title: QString::from(&initial_detail.title),
+            detail_rows_json: QString::from(&json_or_empty_array(&initial_detail.rows)),
+            detail_status: QString::from(&initial_detail.status),
             playback_state: QString::from(playback.state.as_str()),
             now_playing_title: QString::from(&playback.title),
             now_playing_artist: QString::from(&playback.artist),
@@ -253,11 +435,11 @@ impl Default for SpotixAppRust {
 
 impl qobject::SpotixApp {
     pub fn go_home(self: Pin<&mut Self>) {
-        self.set_route(QString::from("home"));
+        self.navigate_to(QtNavTarget::Home, true);
     }
 
     pub fn go_login(self: Pin<&mut Self>) {
-        self.set_route(QString::from("login"));
+        self.navigate_to(QtNavTarget::Login, true);
     }
 
     pub fn submit_search(mut self: Pin<&mut Self>) {
@@ -336,14 +518,14 @@ impl qobject::SpotixApp {
         });
         set_playback_configured(false);
         self.as_mut().set_authenticated(false);
-        self.as_mut().set_route(QString::from("login"));
         self.as_mut().set_status(QString::from("Signed out"));
         self.as_mut().set_login_status(QString::from("Signed out"));
         self.as_mut().set_login_error(QString::from(""));
         self.as_mut().set_profile_name(QString::from(""));
         self.as_mut()
             .set_library_status(QString::from("Library cleared"));
-        self.clear_library_json();
+        self.as_mut().clear_library_json();
+        self.navigate_to(QtNavTarget::Login, false);
     }
 
     pub fn refresh_session(mut self: Pin<&mut Self>) {
@@ -387,7 +569,7 @@ impl qobject::SpotixApp {
                     self.as_mut().set_login_status(QString::from(&status));
                     self.as_mut().set_login_error(QString::from(""));
                     if authenticated {
-                        self.as_mut().set_route(QString::from("home"));
+                        self.as_mut().navigate_to(QtNavTarget::Home, false);
                     }
                 }
                 Err(err) => {
@@ -415,6 +597,7 @@ impl qobject::SpotixApp {
         }
         self.as_mut().poll_search_result();
         self.as_mut().poll_library_result();
+        self.as_mut().poll_nav_result();
         self.as_mut().handle_oauth_revoked();
     }
 
@@ -458,6 +641,9 @@ impl qobject::SpotixApp {
                     self.as_mut().set_search_status(QString::from(&message));
                     self.as_mut()
                         .set_search_results_json(QString::from(&json_or_empty(&results)));
+                    if nav_state().current == QtNavTarget::Search {
+                        self.as_mut().navigate_to(QtNavTarget::Search, false);
+                    }
                 }
                 Err(err) => {
                     self.as_mut()
@@ -492,6 +678,18 @@ impl qobject::SpotixApp {
                         .set_saved_shows_json(QString::from(&library.saved_shows_json));
                     self.as_mut()
                         .set_library_status(QString::from("Library loaded"));
+                    self.as_mut().sync_nav_tree();
+                    if matches!(
+                        nav_state().current,
+                        QtNavTarget::Library
+                            | QtNavTarget::SavedTracks
+                            | QtNavTarget::Playlists
+                            | QtNavTarget::SavedAlbums
+                            | QtNavTarget::Shows
+                    ) {
+                        let current = nav_state().current;
+                        self.as_mut().navigate_to(current, false);
+                    }
                 }
                 Err(err) => {
                     self.as_mut()
@@ -509,7 +707,6 @@ impl qobject::SpotixApp {
                 runtime.session.shutdown();
             });
             self.as_mut().set_authenticated(false);
-            self.as_mut().set_route(QString::from("login"));
             self.as_mut()
                 .set_login_status(QString::from("Spotify login expired"));
             self.as_mut().set_login_error(QString::from(
@@ -520,6 +717,7 @@ impl qobject::SpotixApp {
             self.as_mut()
                 .set_library_status(QString::from("Login required"));
             self.as_mut().clear_library_json();
+            self.as_mut().navigate_to(QtNavTarget::Login, false);
         }
     }
 
@@ -603,11 +801,184 @@ impl qobject::SpotixApp {
         self.as_mut().refresh_playback();
     }
 
+    pub fn navigate_to_route(self: Pin<&mut Self>, route: &QString) {
+        if let Some(target) = QtNavTarget::from_item_id(&route.to_string()) {
+            self.navigate_to(target, true);
+        }
+    }
+
+    pub fn navigate_back(mut self: Pin<&mut Self>) {
+        let mut state = nav_state();
+        if let Some(target) = state.history.pop() {
+            set_nav_state(state);
+            self.as_mut().navigate_to(target, false);
+        }
+    }
+
+    pub fn activate_tree_item(mut self: Pin<&mut Self>, item_id: &QString) {
+        let item_id = item_id.to_string();
+        if item_id.starts_with("track:") {
+            self.as_mut().activate_detail_row(&QString::from(&item_id));
+            return;
+        }
+        if let Some(target) = QtNavTarget::from_item_id(&item_id) {
+            self.as_mut().navigate_to(target, true);
+        }
+    }
+
+    pub fn activate_detail_row(mut self: Pin<&mut Self>, row_id: &QString) {
+        let row_id = row_id.to_string();
+        if let Some(track_id) = row_id.strip_prefix("track:") {
+            let context_ids = parse_json_array::<QtDetailRow>(&self.detail_rows_json().to_string())
+                .into_iter()
+                .filter(|row| row.playable)
+                .filter_map(|row| row.id.strip_prefix("track:").map(str::to_string))
+                .collect::<Vec<_>>();
+            match playback_service::play_track_context(track_id, context_ids) {
+                Ok(message) => {
+                    self.as_mut().set_playback_status(QString::from(&message));
+                    self.as_mut().refresh_playback();
+                }
+                Err(err) => {
+                    self.as_mut()
+                        .set_playback_status(QString::from(&format!("Playback failed: {err}")));
+                }
+            }
+            return;
+        }
+        if let Some(target) = QtNavTarget::from_item_id(&row_id) {
+            self.as_mut().navigate_to(target, true);
+        }
+    }
+
+    pub fn open_album(self: Pin<&mut Self>, id: &QString, name: &QString) {
+        self.navigate_to(
+            QtNavTarget::Album {
+                id: id.to_string(),
+                name: name.to_string(),
+            },
+            true,
+        );
+    }
+
+    pub fn open_artist(self: Pin<&mut Self>, id: &QString, name: &QString) {
+        self.navigate_to(
+            QtNavTarget::Artist {
+                id: id.to_string(),
+                name: name.to_string(),
+            },
+            true,
+        );
+    }
+
+    pub fn open_playlist(self: Pin<&mut Self>, id: &QString, name: &QString) {
+        self.navigate_to(
+            QtNavTarget::Playlist {
+                id: id.to_string(),
+                name: name.to_string(),
+            },
+            true,
+        );
+    }
+
+    pub fn open_show(self: Pin<&mut Self>, id: &QString, name: &QString) {
+        self.navigate_to(
+            QtNavTarget::Show {
+                id: id.to_string(),
+                name: name.to_string(),
+            },
+            true,
+        );
+    }
+
+    fn navigate_to(mut self: Pin<&mut Self>, target: QtNavTarget, push_history: bool) {
+        let mut state = nav_state();
+        if push_history && state.current != target {
+            state.history.push(state.current.clone());
+        }
+        state.current = target.clone();
+        set_nav_state(state.clone());
+
+        self.as_mut().set_route(QString::from(target.route()));
+        self.as_mut()
+            .set_active_route_title(QString::from(&target.title()));
+        self.as_mut().sync_nav_tree();
+
+        match immediate_nav_document(&target, self.as_ref().get_ref()) {
+            Some(document) => {
+                self.as_mut().apply_nav_document(document);
+            }
+            None => {
+                self.as_mut()
+                    .set_detail_status(QString::from("Loading route data..."));
+                self.as_mut()
+                    .set_detail_rows_json(QString::from(&json_or_empty_array(&loading_rows(
+                        &target.title(),
+                    ))));
+                thread::spawn(move || {
+                    let result = load_nav_document(target);
+                    *NAV_RESULT
+                        .get_or_init(|| Mutex::new(None))
+                        .lock()
+                        .expect("qt nav result lock poisoned") = Some(result);
+                });
+            }
+        }
+    }
+
+    fn poll_nav_result(mut self: Pin<&mut Self>) {
+        let result = NAV_RESULT
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .expect("qt nav result lock poisoned")
+            .take();
+
+        if let Some(result) = result {
+            match result {
+                Ok(payload) => {
+                    let state = nav_state();
+                    if state.current == payload.target {
+                        playback_service::register_tracks(payload.tracks_for_playback);
+                        self.as_mut().apply_nav_document(payload.document);
+                    }
+                    self.as_mut().sync_nav_tree();
+                }
+                Err(err) => {
+                    self.as_mut()
+                        .set_detail_status(QString::from(&format!("Route load failed: {err}")));
+                    self.as_mut()
+                        .set_detail_rows_json(QString::from(&json_or_empty_array(&error_rows(
+                            &err,
+                        ))));
+                }
+            }
+        }
+    }
+
+    fn apply_nav_document(mut self: Pin<&mut Self>, document: QtNavDocument) {
+        self.as_mut()
+            .set_active_route_title(QString::from(&document.title));
+        self.as_mut()
+            .set_detail_status(QString::from(&document.status));
+        self.as_mut()
+            .set_detail_rows_json(QString::from(&json_or_empty_array(&document.rows)));
+    }
+
+    fn sync_nav_tree(mut self: Pin<&mut Self>) {
+        let playlists = parse_json_array::<QtPlaylist>(&self.playlists_json().to_string());
+        let albums = parse_json_array::<QtAlbum>(&self.saved_albums_json().to_string());
+        let shows = parse_json_array::<QtShow>(&self.saved_shows_json().to_string());
+        let tree = nav_tree(&nav_state(), &playlists, &albums, &shows);
+        self.as_mut()
+            .set_nav_tree_json(QString::from(&json_or_empty_array(&tree)));
+    }
+
     fn clear_library_json(mut self: Pin<&mut Self>) {
         self.as_mut().set_playlists_json(QString::from("[]"));
         self.as_mut().set_saved_tracks_json(QString::from("[]"));
         self.as_mut().set_saved_albums_json(QString::from("[]"));
         self.as_mut().set_saved_shows_json(QString::from("[]"));
+        self.as_mut().sync_nav_tree();
     }
 }
 
@@ -627,6 +998,577 @@ fn set_playback_configured(configured: bool) {
         .get_or_init(|| Mutex::new(false))
         .lock()
         .expect("qt playback configured lock poisoned") = configured;
+}
+
+fn nav_state() -> QtNavState {
+    NAV_STATE
+        .get_or_init(|| Mutex::new(QtNavState::default()))
+        .lock()
+        .expect("qt nav state lock poisoned")
+        .clone()
+}
+
+fn set_nav_state(state: QtNavState) {
+    *NAV_STATE
+        .get_or_init(|| Mutex::new(QtNavState::default()))
+        .lock()
+        .expect("qt nav state lock poisoned") = state;
+}
+
+fn nav_tree(
+    state: &QtNavState,
+    playlists: &[QtPlaylist],
+    albums: &[QtAlbum],
+    shows: &[QtShow],
+) -> Vec<QtTreeItem> {
+    let mut items = Vec::new();
+    push_tree_route(&mut items, "route:home", "", "home", "Spotix", "root", 0);
+    push_tree_route(
+        &mut items,
+        "route:login",
+        "route:home",
+        "account",
+        "Account",
+        "",
+        1,
+    );
+    push_tree_route(
+        &mut items,
+        "route:library",
+        "route:home",
+        "library",
+        "Library",
+        "saved",
+        1,
+    );
+    push_tree_route(
+        &mut items,
+        "route:saved-tracks",
+        "route:library",
+        "tracks",
+        "Saved Tracks",
+        "",
+        2,
+    );
+    push_tree_route(
+        &mut items,
+        "route:playlists",
+        "route:library",
+        "playlists",
+        "Playlists",
+        &format!("{} loaded", playlists.len()),
+        2,
+    );
+    for playlist in playlists.iter().take(40) {
+        push_tree_route(
+            &mut items,
+            &format!("playlist:{}", playlist.id),
+            "route:playlists",
+            "playlist",
+            &playlist.title,
+            &playlist.owner,
+            3,
+        );
+    }
+    push_tree_route(
+        &mut items,
+        "route:saved-albums",
+        "route:library",
+        "albums",
+        "Albums",
+        &format!("{} loaded", albums.len()),
+        2,
+    );
+    for album in albums.iter().take(40) {
+        push_tree_route(
+            &mut items,
+            &format!("album:{}", album.id),
+            "route:saved-albums",
+            "album",
+            &album.title,
+            &album.artist,
+            3,
+        );
+    }
+    push_tree_route(
+        &mut items,
+        "route:artists",
+        "route:library",
+        "artists",
+        "Artists",
+        "from search/detail",
+        2,
+    );
+    push_tree_route(
+        &mut items,
+        "route:shows",
+        "route:library",
+        "shows",
+        "Podcasts",
+        &format!("{} loaded", shows.len()),
+        2,
+    );
+    for show in shows.iter().take(40) {
+        push_tree_route(
+            &mut items,
+            &format!("show:{}", show.id),
+            "route:shows",
+            "show",
+            &show.title,
+            &show.publisher,
+            3,
+        );
+    }
+    push_tree_route(
+        &mut items,
+        "route:search",
+        "route:home",
+        "search",
+        "Search",
+        "press /",
+        1,
+    );
+    push_tree_route(
+        &mut items,
+        "route:lyrics",
+        "route:home",
+        "lyrics",
+        "Lyrics",
+        "parity",
+        1,
+    );
+
+    for item in &mut items {
+        item.expanded = item.depth < 2 || item.id == format!("route:{}", state.current.route());
+    }
+    items
+}
+
+fn push_tree_route(
+    items: &mut Vec<QtTreeItem>,
+    id: &str,
+    parent_id: &str,
+    kind: &str,
+    label: &str,
+    meta: &str,
+    depth: i32,
+) {
+    items.push(QtTreeItem {
+        id: id.to_string(),
+        parent_id: parent_id.to_string(),
+        kind: kind.to_string(),
+        label: label.to_string(),
+        meta: meta.to_string(),
+        depth,
+        expanded: true,
+        selectable: true,
+        playable: false,
+    });
+}
+
+fn immediate_nav_document(target: &QtNavTarget, app: &qobject::SpotixApp) -> Option<QtNavDocument> {
+    let title = target.title();
+    let status = match target {
+        QtNavTarget::Home => app.status().to_string(),
+        QtNavTarget::Login => app.login_status().to_string(),
+        QtNavTarget::Library
+        | QtNavTarget::SavedTracks
+        | QtNavTarget::Playlists
+        | QtNavTarget::SavedAlbums
+        | QtNavTarget::Artists
+        | QtNavTarget::Shows => app.library_status().to_string(),
+        QtNavTarget::Search => app.search_status().to_string(),
+        QtNavTarget::Lyrics => "Lyrics view is still parity work.".to_string(),
+        QtNavTarget::Playlist { .. }
+        | QtNavTarget::Album { .. }
+        | QtNavTarget::Artist { .. }
+        | QtNavTarget::Show { .. } => return None,
+    };
+
+    let rows = match target {
+        QtNavTarget::Home => home_rows(&status),
+        QtNavTarget::Login => account_rows(app.authenticated(), &app.login_error().to_string()),
+        QtNavTarget::Library => library_rows(app),
+        QtNavTarget::SavedTracks => {
+            qt_track_rows(&parse_json_array(&app.saved_tracks_json().to_string()), 0)
+        }
+        QtNavTarget::Playlists => parse_json_array::<QtPlaylist>(&app.playlists_json().to_string())
+            .iter()
+            .map(|playlist| {
+                QtDetailRow::route(
+                    format!("playlist:{}", playlist.id),
+                    "playlist",
+                    &playlist.title,
+                    &playlist.owner,
+                    0,
+                )
+            })
+            .collect(),
+        QtNavTarget::SavedAlbums => {
+            parse_json_array::<QtAlbum>(&app.saved_albums_json().to_string())
+                .iter()
+                .map(|album| {
+                    QtDetailRow::route(
+                        format!("album:{}", album.id),
+                        "album",
+                        &album.title,
+                        &album.artist,
+                        0,
+                    )
+                })
+                .collect()
+        }
+        QtNavTarget::Artists => vec![QtDetailRow::route(
+            "route:search",
+            "search",
+            "Search for artists",
+            "artist detail routes are loaded from search results",
+            0,
+        )],
+        QtNavTarget::Shows => parse_json_array::<QtShow>(&app.saved_shows_json().to_string())
+            .iter()
+            .map(|show| {
+                QtDetailRow::route(
+                    format!("show:{}", show.id),
+                    "show",
+                    &show.title,
+                    &show.publisher,
+                    0,
+                )
+            })
+            .collect(),
+        QtNavTarget::Search => search_rows(&app.search_results_json().to_string()),
+        QtNavTarget::Lyrics => vec![QtDetailRow::route(
+            "route:lyrics",
+            "lyrics",
+            "Lyrics",
+            "not yet implemented in the Qt port",
+            0,
+        )],
+        _ => Vec::new(),
+    };
+
+    Some(QtNavDocument {
+        title,
+        status,
+        rows,
+    })
+}
+
+fn load_nav_document(target: QtNavTarget) -> Result<QtNavPayload, String> {
+    let api = WebApi::global();
+    let mut tracks_for_playback = Vec::new();
+    let document = match &target {
+        QtNavTarget::Playlist { id, name } => {
+            let playlist = api.get_playlist(id).map_err(|err| err.to_string())?;
+            let tracks = api
+                .get_playlist_tracks_all(id)
+                .map_err(|err| err.to_string())?;
+            tracks_for_playback.extend(tracks.iter().cloned());
+            let mut rows = vec![QtDetailRow::playlist(&playlist, 0)];
+            rows.push(QtDetailRow::route(
+                format!("playlist:{id}"),
+                "section",
+                "Tracks",
+                format!("{} track(s)", tracks.len()),
+                1,
+            ));
+            rows.extend(tracks.iter().map(|track| QtDetailRow::track(track, 2)));
+            QtNavDocument {
+                title: playlist.name.to_string(),
+                status: format!("Playlist | {name} | {} track(s)", tracks.len()),
+                rows,
+            }
+        }
+        QtNavTarget::Album { id, name } => {
+            let album = api.get_album(id).map_err(|err| err.to_string())?.data;
+            let tracks = album.clone().into_tracks_with_context();
+            tracks_for_playback.extend(tracks.iter().cloned());
+            let mut rows = vec![QtDetailRow::album(&album, 0)];
+            rows.push(QtDetailRow::route(
+                format!("album:{id}"),
+                "section",
+                "Tracks",
+                format!("{} track(s)", tracks.len()),
+                1,
+            ));
+            rows.extend(tracks.iter().map(|track| QtDetailRow::track(track, 2)));
+            QtNavDocument {
+                title: album.name.to_string(),
+                status: format!("Album | {name} | {}", album.release()),
+                rows,
+            }
+        }
+        QtNavTarget::Artist { id, name } => {
+            let artist = api.get_artist(id).map_err(|err| err.to_string())?;
+            let top_tracks = api
+                .get_artist_top_tracks(id)
+                .map_err(|err| err.to_string())?;
+            let albums = api.get_artist_albums(id).map_err(|err| err.to_string())?;
+            tracks_for_playback.extend(top_tracks.iter().cloned());
+            let mut rows = vec![QtDetailRow::artist(&artist, 0)];
+            rows.push(QtDetailRow::route(
+                format!("artist:{id}:top-tracks"),
+                "section",
+                "Top Tracks",
+                format!("{} track(s)", top_tracks.len()),
+                1,
+            ));
+            rows.extend(top_tracks.iter().map(|track| QtDetailRow::track(track, 2)));
+            rows.push(QtDetailRow::route(
+                format!("artist:{id}:albums"),
+                "section",
+                "Albums",
+                format!("{} album(s)", albums.albums.len()),
+                1,
+            ));
+            rows.extend(
+                albums
+                    .albums
+                    .iter()
+                    .map(|album| QtDetailRow::album(album, 2)),
+            );
+            QtNavDocument {
+                title: artist.name.to_string(),
+                status: format!("Artist | {name}"),
+                rows,
+            }
+        }
+        QtNavTarget::Show { id, name } => {
+            let show = api.get_show(id).map_err(|err| err.to_string())?.data;
+            let episodes = api.get_show_episodes(id).map_err(|err| err.to_string())?;
+            let mut rows = vec![QtDetailRow::show(&show, 0)];
+            rows.push(QtDetailRow::route(
+                format!("show:{id}:episodes"),
+                "section",
+                "Episodes",
+                format!("{} episode(s)", episodes.len()),
+                1,
+            ));
+            rows.extend(
+                episodes
+                    .iter()
+                    .map(|episode| QtDetailRow::episode(episode, 2)),
+            );
+            QtNavDocument {
+                title: show.name.to_string(),
+                status: format!("Podcast | {name}"),
+                rows,
+            }
+        }
+        _ => QtNavDocument {
+            title: target.title(),
+            status: "Route loaded".to_string(),
+            rows: Vec::new(),
+        },
+    };
+
+    Ok(QtNavPayload {
+        target,
+        document,
+        tracks_for_playback,
+    })
+}
+
+fn home_rows(status: &str) -> Vec<QtDetailRow> {
+    vec![
+        QtDetailRow::route(
+            "route:library",
+            "library",
+            "Library",
+            "load saved content",
+            0,
+        ),
+        QtDetailRow::route("route:search", "search", "Search", "press / to focus", 0),
+        QtDetailRow::route("route:lyrics", "lyrics", "Lyrics", "parity placeholder", 0),
+        QtDetailRow::route("route:login", "account", "Account", status, 0),
+    ]
+}
+
+fn account_rows(authenticated: &bool, login_error: &str) -> Vec<QtDetailRow> {
+    let mut rows = vec![QtDetailRow::route(
+        "route:login",
+        "account",
+        if *authenticated {
+            "Connected"
+        } else {
+            "Login required"
+        },
+        "use the account commands to login/logout",
+        0,
+    )];
+    if !login_error.is_empty() {
+        rows.push(QtDetailRow::route(
+            "route:login:error",
+            "error",
+            "Last error",
+            login_error,
+            1,
+        ));
+    }
+    rows
+}
+
+fn library_rows(app: &qobject::SpotixApp) -> Vec<QtDetailRow> {
+    vec![
+        QtDetailRow::route(
+            "route:saved-tracks",
+            "tracks",
+            "Saved Tracks",
+            format!(
+                "{} loaded",
+                parse_json_array::<QtTrack>(&app.saved_tracks_json().to_string()).len()
+            ),
+            0,
+        ),
+        QtDetailRow::route(
+            "route:playlists",
+            "playlists",
+            "Playlists",
+            format!(
+                "{} loaded",
+                parse_json_array::<QtPlaylist>(&app.playlists_json().to_string()).len()
+            ),
+            0,
+        ),
+        QtDetailRow::route(
+            "route:saved-albums",
+            "albums",
+            "Albums",
+            format!(
+                "{} loaded",
+                parse_json_array::<QtAlbum>(&app.saved_albums_json().to_string()).len()
+            ),
+            0,
+        ),
+        QtDetailRow::route(
+            "route:shows",
+            "shows",
+            "Podcasts",
+            format!(
+                "{} loaded",
+                parse_json_array::<QtShow>(&app.saved_shows_json().to_string()).len()
+            ),
+            0,
+        ),
+    ]
+}
+
+fn search_rows(json: &str) -> Vec<QtDetailRow> {
+    let results = serde_json::from_str::<QtSearchResults>(json).unwrap_or_default();
+    let mut rows = Vec::new();
+    rows.push(QtDetailRow::route(
+        "route:search:tracks",
+        "section",
+        "Tracks",
+        format!("{} result(s)", results.tracks.len()),
+        0,
+    ));
+    rows.extend(qt_track_rows(&results.tracks, 1));
+    rows.push(QtDetailRow::route(
+        "route:search:albums",
+        "section",
+        "Albums",
+        format!("{} result(s)", results.albums.len()),
+        0,
+    ));
+    rows.extend(results.albums.iter().map(|album| {
+        QtDetailRow::route(
+            format!("album:{}", album.id),
+            "album",
+            &album.title,
+            &album.artist,
+            1,
+        )
+    }));
+    rows.push(QtDetailRow::route(
+        "route:search:artists",
+        "section",
+        "Artists",
+        format!("{} result(s)", results.artists.len()),
+        0,
+    ));
+    rows.extend(results.artists.iter().map(|artist| {
+        QtDetailRow::route(
+            format!("artist:{}", artist.id),
+            "artist",
+            &artist.name,
+            "",
+            1,
+        )
+    }));
+    rows.push(QtDetailRow::route(
+        "route:search:playlists",
+        "section",
+        "Playlists",
+        format!("{} result(s)", results.playlists.len()),
+        0,
+    ));
+    rows.extend(results.playlists.iter().map(|playlist| {
+        QtDetailRow::route(
+            format!("playlist:{}", playlist.id),
+            "playlist",
+            &playlist.title,
+            &playlist.owner,
+            1,
+        )
+    }));
+    rows.push(QtDetailRow::route(
+        "route:search:shows",
+        "section",
+        "Podcasts",
+        format!("{} result(s)", results.shows.len()),
+        0,
+    ));
+    rows.extend(results.shows.iter().map(|show| {
+        QtDetailRow::route(
+            format!("show:{}", show.id),
+            "show",
+            &show.title,
+            &show.publisher,
+            1,
+        )
+    }));
+    rows
+}
+
+fn qt_track_rows(tracks: &[QtTrack], depth: i32) -> Vec<QtDetailRow> {
+    tracks
+        .iter()
+        .map(|track| QtDetailRow {
+            id: format!("track:{}", track.id),
+            kind: "track".to_string(),
+            label: track.title.clone(),
+            meta: format!("{} | {}", track.artist, track.album),
+            depth,
+            playable: true,
+            expandable: false,
+        })
+        .collect()
+}
+
+fn loading_rows(title: &str) -> Vec<QtDetailRow> {
+    vec![QtDetailRow::route(
+        "route:loading",
+        "status",
+        format!("Loading {title}"),
+        "waiting for Spotify data",
+        0,
+    )]
+}
+
+fn error_rows(error: &str) -> Vec<QtDetailRow> {
+    vec![QtDetailRow::route(
+        "route:error",
+        "error",
+        "Route load failed",
+        error,
+        0,
+    )]
+}
+
+fn parse_json_array<T: serde::de::DeserializeOwned>(json: &str) -> Vec<T> {
+    serde_json::from_str(json).unwrap_or_default()
 }
 
 struct LibraryJson {

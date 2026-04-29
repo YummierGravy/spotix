@@ -1,14 +1,14 @@
-use crate::data::{Album, Artist, Playlist, SearchResults, Show, Track};
-use serde::Serialize;
+use crate::data::{Album, Artist, Episode, Playlist, SearchResults, Show, Track};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct QtImage {
     pub url: String,
     pub width: i32,
     pub height: i32,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct QtTrack {
     pub id: String,
     pub title: String,
@@ -18,7 +18,7 @@ pub struct QtTrack {
     pub image_url: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct QtAlbum {
     pub id: String,
     pub title: String,
@@ -26,14 +26,14 @@ pub struct QtAlbum {
     pub image_url: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct QtArtist {
     pub id: String,
     pub name: String,
     pub image_url: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct QtPlaylist {
     pub id: String,
     pub title: String,
@@ -41,7 +41,7 @@ pub struct QtPlaylist {
     pub image_url: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct QtShow {
     pub id: String,
     pub title: String,
@@ -49,7 +49,7 @@ pub struct QtShow {
     pub image_url: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct QtSearchResults {
     pub query: String,
     pub tracks: Vec<QtTrack>,
@@ -57,6 +57,45 @@ pub struct QtSearchResults {
     pub artists: Vec<QtArtist>,
     pub playlists: Vec<QtPlaylist>,
     pub shows: Vec<QtShow>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct QtTreeItem {
+    pub id: String,
+    pub parent_id: String,
+    pub kind: String,
+    pub label: String,
+    pub meta: String,
+    pub depth: i32,
+    pub expanded: bool,
+    pub selectable: bool,
+    pub playable: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct QtDetailRow {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub meta: String,
+    pub depth: i32,
+    pub playable: bool,
+    pub expandable: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct QtNavDocument {
+    pub title: String,
+    pub status: String,
+    pub rows: Vec<QtDetailRow>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct QtEpisode {
+    pub id: String,
+    pub title: String,
+    pub show: String,
+    pub duration_ms: i32,
 }
 
 impl From<&Track> for QtTrack {
@@ -162,6 +201,105 @@ impl From<&SearchResults> for QtSearchResults {
                 .iter()
                 .map(|show| QtShow::from(&**show))
                 .collect(),
+        }
+    }
+}
+
+impl From<&Episode> for QtEpisode {
+    fn from(episode: &Episode) -> Self {
+        Self {
+            id: episode.id.0.to_base62(),
+            title: episode.name.to_string(),
+            show: episode.show.name.to_string(),
+            duration_ms: duration_ms(episode.duration),
+        }
+    }
+}
+
+impl QtDetailRow {
+    pub fn route(
+        id: impl Into<String>,
+        kind: impl Into<String>,
+        label: impl Into<String>,
+        meta: impl Into<String>,
+        depth: i32,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            kind: kind.into(),
+            label: label.into(),
+            meta: meta.into(),
+            depth,
+            playable: false,
+            expandable: true,
+        }
+    }
+
+    pub fn track(track: &Track, depth: i32) -> Self {
+        Self {
+            id: format!("track:{}", track.id.0.to_base62()),
+            kind: "track".to_string(),
+            label: track.name.to_string(),
+            meta: format!("{} | {}", track.artist_names(), track.album_name()),
+            depth,
+            playable: !matches!(track.is_playable, Some(false)),
+            expandable: false,
+        }
+    }
+
+    pub fn album(album: &Album, depth: i32) -> Self {
+        Self::route(
+            format!("album:{}", album.id),
+            "album",
+            album.name.to_string(),
+            album
+                .artists
+                .front()
+                .map(|artist| artist.name.to_string())
+                .unwrap_or_default(),
+            depth,
+        )
+    }
+
+    pub fn playlist(playlist: &Playlist, depth: i32) -> Self {
+        Self::route(
+            format!("playlist:{}", playlist.id),
+            "playlist",
+            playlist.name.to_string(),
+            playlist.owner.display_name.to_string(),
+            depth,
+        )
+    }
+
+    pub fn artist(artist: &Artist, depth: i32) -> Self {
+        Self::route(
+            format!("artist:{}", artist.id),
+            "artist",
+            artist.name.to_string(),
+            "artist",
+            depth,
+        )
+    }
+
+    pub fn show(show: &Show, depth: i32) -> Self {
+        Self::route(
+            format!("show:{}", show.id),
+            "show",
+            show.name.to_string(),
+            show.publisher.to_string(),
+            depth,
+        )
+    }
+
+    pub fn episode(episode: &Episode, depth: i32) -> Self {
+        Self {
+            id: format!("episode:{}", episode.id.0.to_base62()),
+            kind: "episode".to_string(),
+            label: episode.name.to_string(),
+            meta: episode.release(),
+            depth,
+            playable: false,
+            expandable: false,
         }
     }
 }

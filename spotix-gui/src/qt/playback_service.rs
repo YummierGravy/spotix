@@ -181,6 +181,24 @@ pub fn play_track_id(id: &str) -> Result<String, String> {
         .unwrap_or_else(|| Err("Playback service is not initialized".to_string()))
 }
 
+pub fn play_track_context(id: &str, context_ids: Vec<String>) -> Result<String, String> {
+    let item_id = ItemId::from_base62(id, ItemIdType::Track)
+        .ok_or_else(|| format!("Invalid track id: {id}"))?;
+    let mut item_ids = context_ids
+        .iter()
+        .filter_map(|id| ItemId::from_base62(id, ItemIdType::Track))
+        .collect::<Vec<_>>();
+    if item_ids.is_empty() {
+        item_ids.push(item_id);
+    }
+    let position = item_ids
+        .iter()
+        .position(|candidate| *candidate == item_id)
+        .unwrap_or(0);
+    with_service(|service| service.play_item_ids(item_ids, position))
+        .unwrap_or_else(|| Err("Playback service is not initialized".to_string()))
+}
+
 fn send(command: PlayerCommand) {
     let _ = with_service(|service| {
         service.send(command);
@@ -341,6 +359,42 @@ impl QtPlaybackService {
         self.update_snapshot(|snapshot| {
             snapshot.status = "Loading track".to_string();
             snapshot.queue_summary = "Single track playback".to_string();
+        });
+
+        Ok(format!("Playing {title}"))
+    }
+
+    fn play_item_ids(&self, item_ids: Vec<ItemId>, position: usize) -> Result<String, String> {
+        if item_ids.is_empty() {
+            return Err("No tracks to play".to_string());
+        }
+
+        let items = item_ids
+            .iter()
+            .map(|item_id| PlaybackItem {
+                item_id: *item_id,
+                norm_level: NormalizationLevel::Track,
+            })
+            .collect::<Vec<_>>();
+        let position = position.min(items.len().saturating_sub(1));
+        let title = self
+            .metadata
+            .lock()
+            .expect("qt playback metadata lock poisoned")
+            .get(&item_ids[position])
+            .map(|metadata| metadata.title.clone())
+            .unwrap_or_else(|| item_ids[position].to_base62());
+
+        self.sender
+            .send(PlayerEvent::Command(PlayerCommand::LoadQueue {
+                items,
+                position,
+            }))
+            .map_err(|err| err.to_string())?;
+
+        self.update_snapshot(|snapshot| {
+            snapshot.status = "Loading queue".to_string();
+            snapshot.queue_summary = format!("{} track(s) queued", item_ids.len());
         });
 
         Ok(format!("Playing {title}"))

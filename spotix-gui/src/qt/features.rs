@@ -20,7 +20,7 @@ pub const CORE_SCREENS: &[QtFeature] = &[
     },
     QtFeature {
         name: "Library",
-        state: QtFeatureState::InProgress,
+        state: QtFeatureState::Available,
         route: "library",
     },
     QtFeature {
@@ -30,17 +30,17 @@ pub const CORE_SCREENS: &[QtFeature] = &[
     },
     QtFeature {
         name: "Playlists",
-        state: QtFeatureState::InProgress,
+        state: QtFeatureState::Available,
         route: "playlists",
     },
     QtFeature {
         name: "Albums",
-        state: QtFeatureState::InProgress,
+        state: QtFeatureState::Available,
         route: "albums",
     },
     QtFeature {
         name: "Artists",
-        state: QtFeatureState::InProgress,
+        state: QtFeatureState::Available,
         route: "artists",
     },
     QtFeature {

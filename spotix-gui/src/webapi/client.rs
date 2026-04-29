@@ -311,8 +311,8 @@ impl WebApi {
         }
 
         let mut headers = request.get_headers().clone();
-        let needs_client_token = request.base_uri == "api.spotify.com"
-            || request.base_uri == "api-partner.spotify.com";
+        let needs_client_token =
+            request.base_uri == "api.spotify.com" || request.base_uri == "api-partner.spotify.com";
         if needs_client_token {
             headers.insert("app-platform".to_string(), "WebPlayer".to_string());
             match self.client_token_provider.get() {
@@ -812,7 +812,7 @@ impl WebApi {
                         .map(Duration::from_secs);
                     let delay = self.register_429(retry_after, MIN_429_DELAY);
                     log::warn!("webapi: HTTP 429 cooldown {}s (rspotify)", delay.as_secs());
-                    }
+                }
                 Err(Error::WebApiError(err.to_string()))
             }
         }
@@ -1617,10 +1617,7 @@ impl WebApi {
             .map_err(|_| Error::WebApiError("Invalid artist id".to_string()))?;
         let result: Vec<rspotify::model::FullTrack> =
             self.load_cached_value_rspotify("artist-top-tracks", id, policy, || {
-                self.rspotify_call(|| {
-                    self.rspotify
-                        .artist_top_tracks(artist_id.as_ref(), None)
-                })
+                self.rspotify_call(|| self.rspotify.artist_top_tracks(artist_id.as_ref(), None))
             })?;
         Ok(self
             .rspotify_vec::<Track, _>(result)
@@ -1815,8 +1812,7 @@ impl WebApi {
         let ids: Vec<EpisodeId> = ids.into_iter().collect();
         let id_list = ids.iter().map(|id| id.0.to_base62()).join(",");
         let cache_key = Self::cache_key(&id_list);
-        let request = &RequestBuilder::new("v1/episodes", Method::Get, None)
-            .query("ids", &id_list);
+        let request = &RequestBuilder::new("v1/episodes", Method::Get, None).query("ids", &id_list);
         let (result, _) =
             self.load_cached_value::<Episodes>(request, "episodes", &cache_key, policy)?;
         Ok(result.episodes)

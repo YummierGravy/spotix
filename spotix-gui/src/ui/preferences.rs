@@ -8,20 +8,19 @@ use crate::{
     cmd,
     data::{
         AppState, AudioQuality, Authentication, CacheUsage, Config, EqBands, EqPreset, EqSettings,
-        Preferences, PreferencesTab, Promise, SliderScrollScale, Theme,
-        config::LyricsAppearance,
+        Preferences, PreferencesTab, Promise, SliderScrollScale, Theme, config::LyricsAppearance,
     },
     webapi::WebApi,
-    widget::{icons, Async, Border, Checkbox, MyWidgetExt},
+    widget::{Async, Border, Checkbox, MyWidgetExt, icons},
 };
 use druid::{
+    Color, Data, Env, Event, EventCtx, Insets, Lens, LensExt, LifeCycle, LifeCycleCtx,
+    RenderContext, Selector, Widget, WidgetExt,
     text::ParseFormatter,
     widget::{
         Button, Controller, CrossAxisAlignment, Flex, Label, LineBreaking, MainAxisAlignment,
         RadioGroup, SizedBox, Slider, TextBox, ViewSwitcher,
     },
-    Color, Data, Env, Event, EventCtx, Insets, Lens, LensExt, LifeCycle, LifeCycleCtx,
-    RenderContext, Selector, Widget, WidgetExt,
 };
 use log::warn;
 use serde::Deserialize;
@@ -243,7 +242,10 @@ fn general_tab_widget() -> impl Widget<AppState> {
         .with_child(
             RadioGroup::column(vec![
                 ("Default", LyricsAppearance::Default),
-                ("Spotify styled (dynamic album colors)", LyricsAppearance::SpotifyStyled),
+                (
+                    "Spotify styled (dynamic album colors)",
+                    LyricsAppearance::SpotifyStyled,
+                ),
             ])
             .lens(AppState::config.then(Config::lyrics_appearance)),
         );
@@ -1055,7 +1057,7 @@ impl Authenticate {
         Selector::new("app.preferences.lastfm.authenticate-response");
 }
 
-pub(crate) struct SpotifyAuthResult {
+pub struct SpotifyAuthResult {
     credentials: Option<Credentials>,
     oauth_token: oauth::OAuthToken,
 }

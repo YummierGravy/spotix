@@ -9,6 +9,14 @@ repository = "https://github.com/skyline69/spotix"
 
 [[bin]]
 name = "spotix"
+path = "src/bin/spotix.rs"
+
+[[bin]]
+name = "spotix-qt"
+path = "src/bin/spotix-qt.rs"
+
+[[bin]]
+name = "spotix-druid"
 path = "src/main.rs"
 
 [features]
@@ -48,6 +56,9 @@ rspotify-http = "0.16.1"
 librespot-core = "0.8.0"
 
 # GUI
+cxx = "1.0.190"
+cxx-qt = "0.8.1"
+cxx-qt-lib = { version = "0.8.1", features = ["qt_full"] }
 druid = { version = "0.8.3", features = ["im", "image", "jpeg", "png", "webp", "serde"] }
 druid-shell = { version = "0.8.3", features = ["raw-win-handle"] }
 open = { version = "5.3.3" }
@@ -55,6 +66,10 @@ raw-window-handle = "0.6.2" # Must stay compatible with Druid
 souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }
 sanitize_html = "0.10.0"
 rustfm-scrobble = "1.1.1"
+
+[build-dependencies]
+cxx-qt-build = { version = "0.8.1", features = ["link_qt_object_files"] }
+
 [target.'cfg(windows)'.build-dependencies]
 winres = { version = "0.1.12" }
 image = { version = "0.25.10" }

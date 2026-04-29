@@ -7,8 +7,8 @@ use crate::{
         AfterDelay, AlertCleanupController, NavController, SessionController, SortController,
     },
     data::{
-        ALERT_DURATION, Alert, AlertActionKind, AlertStyle, AppState, CommonCtxSearch, Config,
-        Nav, Playable, Playback, Route, config::SortOrder,
+        ALERT_DURATION, Alert, AlertActionKind, AlertStyle, AppState, CommonCtxSearch, Config, Nav,
+        Playable, Playback, Route, config::SortOrder,
     },
     webapi::WebApi,
     widget::{

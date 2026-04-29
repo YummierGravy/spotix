@@ -19,8 +19,13 @@ pub struct ShowDetail {
 pub struct Show {
     pub id: Arc<str>,
     pub name: Arc<str>,
+    #[serde(default)]
     pub images: Vector<Image>,
+    #[serde(default = "super::utils::default_str")]
+    #[serde(deserialize_with = "super::utils::deserialize_null_arc_str")]
     pub publisher: Arc<str>,
+    #[serde(default = "super::utils::default_str")]
+    #[serde(deserialize_with = "super::utils::deserialize_null_arc_str")]
     pub description: Arc<str>,
     pub total_episodes: Option<usize>,
 }

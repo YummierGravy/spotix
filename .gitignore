@@ -8,4 +8,5 @@ cache
 *.iml
 rust-toolchain
 *.ico
+.qmlls.ini
 other-player/

@@ -27,6 +27,9 @@ It summarizes the commands, repository layout, and coding conventions that are m
 - Linux system dependencies:
   - Debian/Ubuntu: `sudo apt-get install libssl-dev libgtk-3-dev libcairo2-dev libasound2-dev`
   - Fedora/RHEL: `sudo dnf install openssl-devel gtk3-devel cairo-devel alsa-lib-devel`
+- Qt scaffold dependencies:
+ - Install Qt 6 development tools, including `qmake6`, Qt Quick, Qt Quick Controls 2, Qt Network, CMake, a C++ compiler, and `clang-format`.
+ - If both Qt 5 and Qt 6 are installed, set `QMAKE=/path/to/qmake6` or `QT_VERSION_MAJOR=6` before building the Qt scaffold.
 - Cross-compilation for Linux uses `Cross.toml` and installs GTK/OpenSSL/ALSA dev packages in the image.
 - macOS bundling is done from `spotix-gui/` with `cargo-bundle`.
 
@@ -37,7 +40,10 @@ Run these from the repository root unless noted otherwise.
 - Build only the core crate: `cargo build -p spotix-core`
 - Build only the GUI crate: `cargo build -p spotix-gui`
 - Build the GUI with the alternate audio backend: `cargo build -p spotix-gui --no-default-features --features cubeb`
-- Run the GUI app: `cargo run -p spotix-gui --bin spotix`
+- Build the Qt 6/QML GUI: `cargo build -p spotix-gui --bin spotix`
+- Run the Qt 6/QML GUI: `cargo run -p spotix-gui --bin spotix`
+- Build the legacy Druid GUI during migration: `cargo build -p spotix-gui --bin spotix-druid`
+- Run the legacy Druid GUI during migration: `cargo run -p spotix-gui --bin spotix-druid`
 - Run the GUI app in release mode: `cargo run -p spotix-gui --release --bin spotix`
 - Install the app locally from source: `cargo install --locked --path spotix-gui`
 - Build the macOS bundle from `spotix-gui/`: `cargo bundle --release`

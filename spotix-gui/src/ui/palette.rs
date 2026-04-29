@@ -239,11 +239,7 @@ fn relative_luminance(rgb: &[f64; 3]) -> f64 {
 fn contrast_ratio(a: &[f64; 3], b: &[f64; 3]) -> f64 {
     let la = relative_luminance(a) + 0.05;
     let lb = relative_luminance(b) + 0.05;
-    if la > lb {
-        la / lb
-    } else {
-        lb / la
-    }
+    if la > lb { la / lb } else { lb / la }
 }
 
 /// HSL saturation of an RGB color (0-255 range).

@@ -41,6 +41,9 @@ sudo apt-get install libssl-dev libgtk-3-dev libcairo2-dev libasound2-dev
 sudo dnf install openssl-devel gtk3-devel cairo-devel alsa-lib-devel
 ```
 
+**Qt 6 scaffold:**
+Install Qt 6 development tools (`qmake6`, Qt Quick, Qt Quick Controls 2, Qt Network), CMake, a C++ compiler, and `clang-format`. If Qt 5 is also installed, build with `QMAKE=/path/to/qmake6` or `QT_VERSION_MAJOR=6`.
+
 ## Architecture
 
 Spotix is a native Spotify client (fork of psst) organized as a Rust workspace with three crates:
@@ -54,13 +57,14 @@ Core library handling Spotify connectivity and audio:
 - `cache.rs`, `cdn.rs` - Track caching and CDN file fetching
 
 ### spotix-gui
-Druid-based GUI application:
+Qt 6/QML GUI application, with the previous Druid UI preserved temporarily as `spotix-druid` during migration:
 - `ui/` - View modules for each screen (home, library, playlist, album, artist, lyrics, preferences, etc.)
 - `controller/` - Event handlers including `playback.rs` (main playback controller, ~59k lines)
 - `data/` - Application state models and configuration (`config.rs` for user preferences)
 - `widget/` - Custom Druid widgets
 - `webapi/` - Spotify Web API client
 - `delegate.rs` - Main Druid app delegate connecting UI to core
+- `src/bin/spotix.rs`, `src/bin/spotix-qt.rs`, `src/qt/`, `qml/` - Qt 6/QML primary UI using CXX-Qt
 
 ### spotix-cli
 Minimal CLI player for testing core functionality.

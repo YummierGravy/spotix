@@ -1373,13 +1373,7 @@ impl Widget<AppState> for SeekBar {
         }
     }
 
-    fn update(
-        &mut self,
-        ctx: &mut UpdateCtx,
-        old_data: &AppState,
-        data: &AppState,
-        _env: &Env,
-    ) {
+    fn update(&mut self, ctx: &mut UpdateCtx, old_data: &AppState, data: &AppState, _env: &Env) {
         let old_np = &old_data.playback.now_playing;
         let new_np = &data.playback.now_playing;
 
@@ -1467,7 +1461,8 @@ impl Widget<AppState> for SeekBar {
 
         // Use the smooth display progress, not the raw backend progress
         let progress = Duration::from_secs_f64(
-            self.display_progress.clamp(0.0, np.item.duration().as_secs_f64()),
+            self.display_progress
+                .clamp(0.0, np.item.duration().as_secs_f64()),
         );
 
         if data.config.dynamic_playing_bar {
@@ -1611,7 +1606,8 @@ fn paint_dynamic_bar(
     ctx.fill(remaining_rect, &pal.remaining);
 
     // Elapsed
-    let elapsed_rect = Rect::from_origin_size(Point::ORIGIN, Size::new(elapsed_width, bounds.height));
+    let elapsed_rect =
+        Rect::from_origin_size(Point::ORIGIN, Size::new(elapsed_width, bounds.height));
     ctx.fill(elapsed_rect, &bar_color);
 }
 

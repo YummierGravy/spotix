@@ -277,6 +277,10 @@ ApplicationWindow {
         return Math.round(Math.max(0, Math.min(1, root.spotix.volume)) * 100)
     }
 
+    function barClickRatio(mouseX, barWidth) {
+        return Math.max(0, Math.min(1, (mouseX - 2) / Math.max(1, barWidth - 4)))
+    }
+
     function terminalBar(ratio, width, head) {
         var clamped = Math.max(0, Math.min(1, ratio))
         var filled = Math.floor(clamped * width)
@@ -941,30 +945,20 @@ ApplicationWindow {
                                 opacity: 0.72
                             }
 
-                            Repeater {
-                                model: Math.max(0, Math.floor(parent.width / 18))
-
-                                Rectangle {
-                                    x: index * 18
-                                    y: 3
-                                    width: 1
-                                    height: parent.height - 6
-                                    color: borderColor
-                                }
-                            }
-
                             Label {
-                                anchors.centerIn: parent
-                                text: Math.floor(root.progressRatio() * 100) + "%"
+                                anchors.left: parent.left
+                                anchors.leftMargin: Math.max(4, Math.min(parent.width - width - 4, (parent.width - 4) * root.progressRatio() - width / 2))
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: ">"
                                 color: textColor
                                 font.family: "monospace"
-                                font.pixelSize: 11
+                                font.pixelSize: 12
                                 font.bold: true
                             }
 
                             MouseArea {
                                 anchors.fill: parent
-                                onClicked: root.spotix.seekPlayback(mouse.x / Math.max(1, width))
+                                onClicked: root.spotix.seekPlayback(root.barClickRatio(mouse.x, width))
                             }
                         }
 
@@ -981,6 +975,10 @@ ApplicationWindow {
                             font.pixelSize: 12
                         }
 
+                        Item {
+                            Layout.fillWidth: true
+                        }
+
                         Label {
                             text: "Volume"
                             color: cyan
@@ -990,7 +988,7 @@ ApplicationWindow {
                         }
 
                         Rectangle {
-                            Layout.fillWidth: true
+                            Layout.preferredWidth: 180
                             Layout.preferredHeight: 16
                             color: "#050909"
                             border.color: cyan
@@ -1009,7 +1007,7 @@ ApplicationWindow {
 
                             MouseArea {
                                 anchors.fill: parent
-                                onClicked: root.spotix.setPlaybackVolume(mouse.x / Math.max(1, width))
+                                onClicked: root.spotix.setPlaybackVolume(root.barClickRatio(mouse.x, width))
                             }
                         }
 

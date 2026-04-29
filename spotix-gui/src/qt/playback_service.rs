@@ -165,7 +165,17 @@ pub fn set_volume(volume: f64) {
             snapshot.volume = volume;
         });
     });
-    send(PlayerCommand::SetVolume { volume });
+    send(PlayerCommand::SetVolume {
+        volume: ui_volume_to_backend(volume),
+    });
+}
+
+fn ui_volume_to_backend(volume: f64) -> f64 {
+    if volume <= 0.0 {
+        0.0
+    } else {
+        volume.clamp(0.0, 1.0).powf(0.25)
+    }
 }
 
 pub fn register_tracks(tracks: impl IntoIterator<Item = Arc<Track>>) {
@@ -241,7 +251,7 @@ impl QtPlaybackService {
 
         sender
             .send(PlayerEvent::Command(PlayerCommand::SetVolume {
-                volume: config.volume,
+                volume: ui_volume_to_backend(config.volume),
             }))
             .map_err(|err| err.to_string())?;
 

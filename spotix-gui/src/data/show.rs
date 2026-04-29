@@ -1,6 +1,6 @@
 use std::{convert::TryFrom, sync::Arc, time::Duration};
 
-use druid::{Data, Lens, im::Vector};
+use im::Vector;
 use serde::{Deserialize, Serialize};
 use spotix_core::item_id::{ItemId, ItemIdType};
 use time::{Date, macros::format_description};
@@ -9,13 +9,13 @@ use crate::data::{Cached, Image, Promise};
 
 use super::album::DatePrecision;
 
-#[derive(Clone, Data, Lens)]
+#[derive(Clone)]
 pub struct ShowDetail {
     pub show: Promise<Cached<Arc<Show>>, ShowLink>,
     pub episodes: Promise<ShowEpisodes, ShowLink>,
 }
 
-#[derive(Clone, Data, Lens, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Show {
     pub id: Arc<str>,
     pub name: Arc<str>,
@@ -43,13 +43,13 @@ impl Show {
     }
 }
 
-#[derive(Clone, Data, Lens)]
+#[derive(Clone)]
 pub struct ShowEpisodes {
     pub show: ShowLink,
     pub episodes: Vector<Arc<Episode>>,
 }
 
-#[derive(Clone, Debug, Data, Lens, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct ShowLink {
     pub id: Arc<str>,
     pub name: Arc<str>,
@@ -61,7 +61,7 @@ impl ShowLink {
     }
 }
 
-#[derive(Clone, Debug, Data, Lens, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Episode {
     pub id: EpisodeId,
     pub name: Arc<str>,
@@ -73,9 +73,7 @@ pub struct Episode {
     #[serde(deserialize_with = "super::utils::deserialize_millis")]
     pub duration: Duration,
     #[serde(deserialize_with = "super::utils::deserialize_date_option")]
-    #[data(same_fn = "PartialEq::eq")]
     pub release_date: Option<Date>,
-    #[data(same_fn = "PartialEq::eq")]
     pub release_date_precision: Option<DatePrecision>,
     pub resume_point: Option<ResumePoint>,
 }
@@ -101,13 +99,13 @@ impl Episode {
     }
 }
 
-#[derive(Clone, Debug, Data, Lens, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct EpisodeLink {
     pub id: EpisodeId,
     pub name: Arc<str>,
 }
 
-#[derive(Clone, Debug, Data, Lens, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct ResumePoint {
     pub fully_played: bool,
     #[serde(rename = "resume_position_ms")]
@@ -119,12 +117,6 @@ pub struct ResumePoint {
 #[serde(try_from = "String")]
 #[serde(into = "String")]
 pub struct EpisodeId(pub ItemId);
-
-impl Data for EpisodeId {
-    fn same(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
 
 impl TryFrom<String> for EpisodeId {
     type Error = &'static str;

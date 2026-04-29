@@ -1,13 +1,13 @@
 use std::{convert::TryFrom, sync::Arc, time::Duration};
 
-use druid::{Data, Lens, im::Vector, lens::Map};
+use im::Vector;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use spotix_core::item_id::{ItemId, ItemIdType};
 
 use crate::data::{AlbumLink, ArtistLink};
 
-#[derive(Clone, Debug, Data, Lens, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Track {
     #[serde(default)]
     pub id: TrackId,
@@ -31,15 +31,6 @@ pub struct Track {
 }
 
 impl Track {
-    pub fn lens_album_name() -> impl Lens<Self, Arc<str>> {
-        Map::new(
-            |track: &Self| track.album_name(),
-            |_, _| {
-                // Immutable.
-            },
-        )
-    }
-
     pub fn artist_name(&self) -> Arc<str> {
         self.artists
             .front()
@@ -66,7 +57,7 @@ impl Track {
     }
 }
 
-#[derive(Clone, Debug, Data, Lens, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackLines {
     pub start_time_ms: String,
@@ -80,12 +71,6 @@ pub struct TrackLines {
 #[serde(try_from = "String")]
 #[serde(into = "String")]
 pub struct TrackId(pub ItemId);
-
-impl Data for TrackId {
-    fn same(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
 
 impl TryFrom<String> for TrackId {
     type Error = &'static str;
@@ -103,13 +88,13 @@ impl From<TrackId> for String {
     }
 }
 
-#[derive(Clone, Data, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct AudioAnalysis {
     pub segments: Vector<AudioSegment>,
 }
 
-#[derive(Clone, Data, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct AudioSegment {
     #[serde(flatten)]
@@ -119,7 +104,7 @@ pub struct AudioSegment {
     pub loudness_max_time: f64,
 }
 
-#[derive(Clone, Data, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct TimeInterval {
     #[serde(deserialize_with = "super::utils::deserialize_secs")]

@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
-use druid::{Data, Lens, im::Vector};
+use im::Vector;
 use serde::{Deserialize, Serialize};
 use time::{Date, formatting::Formattable, macros::format_description};
 
 use crate::data::{ArtistLink, Cached, Image, Promise, Track};
 
-#[derive(Clone, Data, Lens)]
+#[derive(Clone)]
 pub struct AlbumDetail {
     pub album: Promise<Cached<Arc<Album>>, AlbumLink>,
 }
 
-#[derive(Clone, Data, Lens, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Album {
     pub id: Arc<str>,
     pub name: Arc<str>,
@@ -29,9 +29,7 @@ pub struct Album {
     #[serde(deserialize_with = "super::utils::deserialize_first_page")]
     pub tracks: Vector<Arc<Track>>,
     #[serde(deserialize_with = "super::utils::deserialize_date_option")]
-    #[data(same_fn = "PartialEq::eq")]
     pub release_date: Option<Date>,
-    #[data(same_fn = "PartialEq::eq")]
     pub release_date_precision: Option<DatePrecision>,
 }
 
@@ -88,7 +86,7 @@ impl Album {
     }
 }
 
-#[derive(Clone, Debug, Data, Lens, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct AlbumLink {
     pub id: Arc<str>,
     pub name: Arc<str>,
@@ -102,7 +100,7 @@ impl AlbumLink {
     }
 }
 
-#[derive(Clone, Debug, Data, Eq, PartialEq, Hash, Deserialize, Serialize, Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AlbumType {
     #[default]
@@ -112,7 +110,7 @@ pub enum AlbumType {
     AppearsOn,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Data, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DatePrecision {
     Year,
@@ -120,14 +118,14 @@ pub enum DatePrecision {
     Day,
 }
 
-#[derive(Clone, Debug, Data, Lens, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Copyright {
     pub text: Arc<str>,
     #[serde(rename = "type")]
     pub kind: CopyrightType,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Data, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize)]
 pub enum CopyrightType {
     #[serde(rename = "C")]
     Copyright,

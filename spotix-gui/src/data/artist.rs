@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use druid::{Data, Lens, im::Vector};
+use im::Vector;
 use serde::{Deserialize, Serialize};
 
 use crate::data::{Album, Cached, Image, Promise, Track};
 
-#[derive(Clone, Data, Lens)]
+#[derive(Clone)]
 pub struct ArtistDetail {
     pub artist: Promise<Artist, ArtistLink>,
     pub albums: Promise<ArtistAlbums, ArtistLink>,
@@ -13,7 +13,7 @@ pub struct ArtistDetail {
     pub artist_info: Promise<Cached<ArtistInfo>, ArtistLink>,
 }
 
-#[derive(Clone, Data, Lens, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Artist {
     pub id: Arc<str>,
     pub name: Arc<str>,
@@ -33,14 +33,14 @@ impl Artist {
     }
 }
 
-#[derive(Clone, Data, Lens)]
+#[derive(Clone)]
 pub struct ArtistAlbums {
     pub albums: Vector<Arc<Album>>,
     pub singles: Vector<Arc<Album>>,
     pub compilations: Vector<Arc<Album>>,
     pub appears_on: Vector<Arc<Album>>,
 }
-#[derive(Clone, Data, Lens)]
+#[derive(Clone)]
 pub struct ArtistInfo {
     pub artist_id: Arc<str>,
     pub main_image: Arc<str>,
@@ -49,14 +49,14 @@ pub struct ArtistInfo {
     pub artist_links: Vector<String>,
 }
 
-#[derive(Clone, Data, Lens)]
+#[derive(Clone)]
 pub struct ArtistStats {
     pub followers: i64,
     pub monthly_listeners: i64,
     pub world_rank: i64,
 }
 
-#[derive(Clone, Data, Lens)]
+#[derive(Clone)]
 pub struct ArtistTracks {
     pub id: Arc<str>,
     pub name: Arc<str>,
@@ -72,7 +72,7 @@ impl ArtistTracks {
     }
 }
 
-#[derive(Clone, Debug, Data, Lens, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct ArtistLink {
     pub id: Arc<str>,
     pub name: Arc<str>,

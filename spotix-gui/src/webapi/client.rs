@@ -9,13 +9,9 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use druid::{
-    Data, ImageBuf,
-    im::Vector,
-    image::{self, ImageFormat},
-};
-
 use chrono::{Duration as ChronoDuration, Utc};
+use im::Vector;
+use image::{self, DynamicImage, ImageFormat};
 use itertools::Itertools;
 use librespot_core::{
     Session as LibrespotSession, authentication::Credentials as LibrespotCredentials,
@@ -50,11 +46,10 @@ use crate::{
         self, Album, AlbumType, Artist, ArtistAlbums, ArtistInfo, ArtistLink, ArtistStats,
         AudioAnalysis, Cached, Episode, EpisodeId, EpisodeLink, Image, MixedView, Nav, Page,
         Playlist, PublicUser, Range, Recommendations, RecommendationsRequest, SearchResults,
-        SearchTopic, Show, SpotifyUrl, Track, TrackId, TrackLines, UserProfile,
+        SearchTopic, Show, SpotifyUrl, Track, TrackCredits, TrackId, TrackLines, UserProfile,
         utils::sanitize_html_string,
     },
     error::Error,
-    ui::credits::TrackCredits,
 };
 
 use super::rspotify_client::RSpotifyClient;
@@ -553,7 +548,7 @@ impl WebApi {
 
     /// Send a request using `self.load()`, but only if it isn't already present
     /// in cache.
-    fn load_cached<T: Data + DeserializeOwned>(
+    fn load_cached<T: DeserializeOwned>(
         &self,
         request: &RequestBuilder,
         bucket: &str,
@@ -562,7 +557,7 @@ impl WebApi {
         self.load_cached_with(request, bucket, key, CachePolicy::Use)
     }
 
-    fn load_cached_with<T: Data + DeserializeOwned>(
+    fn load_cached_with<T: DeserializeOwned>(
         &self,
         request: &RequestBuilder,
         bucket: &str,
@@ -1023,12 +1018,12 @@ impl WebApi {
     ) -> Result<MixedView, Error> {
         #[derive(Deserialize)]
         pub struct Welcome {
-            data: WelcomeData,
+            data: HomeData,
         }
 
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
-        pub struct WelcomeData {
+        pub struct HomeData {
             home_sections: HomeSections,
         }
 
@@ -1075,7 +1070,7 @@ impl WebApi {
         #[serde(rename_all = "camelCase")]
         pub struct ContentData {
             #[serde(rename = "__typename")]
-            typename: DataTypename,
+            typename: Typename,
             name: Option<String>,
             uri: Option<String>,
 
@@ -1150,7 +1145,7 @@ impl WebApi {
         }
 
         #[derive(Deserialize)]
-        pub enum DataTypename {
+        pub enum Typename {
             Podcast,
             Playlist,
             Artist,
@@ -1171,11 +1166,11 @@ impl WebApi {
 
         #[derive(Deserialize)]
         pub struct OwnerV2 {
-            data: OwnerV2Data,
+            data: OwnerData,
         }
 
         #[derive(Deserialize)]
-        pub struct OwnerV2Data {
+        pub struct OwnerData {
             #[serde(rename = "__typename")]
             name: String,
         }
@@ -1213,7 +1208,7 @@ impl WebApi {
                     let id = uri.split(':').next_back().unwrap_or("").to_string();
 
                     match item.content.data.typename {
-                        DataTypename::Playlist => {
+                        Typename::Playlist => {
                             playlist.push_back(Playlist {
                                 id: id.into(),
                                 name: Arc::from(item.content.data.name.clone().unwrap()),
@@ -1275,7 +1270,7 @@ impl WebApi {
                                 public: None,
                             });
                         }
-                        DataTypename::Artist => artist.push_back(Artist {
+                        Typename::Artist => artist.push_back(Artist {
                             id: id.into(),
                             name: Arc::from(
                                 item.content.data.profile.as_ref().unwrap().name.clone(),
@@ -1296,7 +1291,7 @@ impl WebApi {
                                 },
                             ),
                         }),
-                        DataTypename::Album => album.push_back(Arc::new(Album {
+                        Typename::Album => album.push_back(Arc::new(Album {
                             id: id.into(),
                             name: Arc::from(item.content.data.name.clone().unwrap()),
                             album_type: AlbumType::Album,
@@ -1340,7 +1335,7 @@ impl WebApi {
                             release_date: None,
                             release_date_precision: None,
                         })),
-                        DataTypename::Podcast => show.push_back(Arc::new(Show {
+                        Typename::Podcast => show.push_back(Arc::new(Show {
                             id: id.into(),
                             name: Arc::from(item.content.data.name.clone().unwrap()),
                             images: item.content.data.cover_art.as_ref().map_or_else(
@@ -1371,7 +1366,7 @@ impl WebApi {
                             total_episodes: item.content.data.total_episodes,
                         })),
                         // For section items we don't cover yet
-                        DataTypename::NotFound => {}
+                        Typename::NotFound => {}
                     }
                 });
             });
@@ -1640,56 +1635,56 @@ impl WebApi {
         id: &str,
         policy: CachePolicy,
     ) -> Result<Cached<ArtistInfo>, Error> {
-        #[derive(Clone, Data, Deserialize)]
+        #[derive(Clone, Deserialize)]
         pub struct Welcome {
-            data: Data1,
+            data: ArtistData,
         }
 
-        #[derive(Clone, Data, Deserialize)]
+        #[derive(Clone, Deserialize)]
         #[serde(rename_all = "camelCase")]
-        pub struct Data1 {
+        pub struct ArtistData {
             artist_union: ArtistUnion,
         }
 
-        #[derive(Clone, Data, Deserialize)]
+        #[derive(Clone, Deserialize)]
         pub struct ArtistUnion {
             profile: Profile,
             stats: Stats,
             visuals: Visuals,
         }
 
-        #[derive(Clone, Data, Deserialize)]
+        #[derive(Clone, Deserialize)]
         #[serde(rename_all = "camelCase")]
         pub struct Profile {
             biography: Biography,
             external_links: ExternalLinks,
         }
 
-        #[derive(Clone, Data, Deserialize)]
+        #[derive(Clone, Deserialize)]
         pub struct Biography {
             text: String,
         }
 
-        #[derive(Clone, Data, Deserialize)]
+        #[derive(Clone, Deserialize)]
         pub struct ExternalLinks {
             items: Vector<ExternalLinksItem>,
         }
 
-        #[derive(Clone, Data, Deserialize)]
+        #[derive(Clone, Deserialize)]
         #[serde(rename_all = "camelCase")]
         pub struct Visuals {
             avatar_image: AvatarImage,
         }
-        #[derive(Clone, Data, Deserialize)]
+        #[derive(Clone, Deserialize)]
         pub struct AvatarImage {
             sources: Vector<Image>,
         }
-        #[derive(Clone, Data, Deserialize)]
+        #[derive(Clone, Deserialize)]
         pub struct ExternalLinksItem {
             url: String,
         }
 
-        #[derive(Clone, Data, Deserialize)]
+        #[derive(Clone, Deserialize)]
         #[serde(rename_all = "camelCase")]
         pub struct Stats {
             followers: i64,
@@ -1886,13 +1881,13 @@ impl WebApi {
     }
 
     pub fn get_lyrics(&self, track_id: String) -> Result<Vector<TrackLines>, Error> {
-        #[derive(Default, Debug, Clone, PartialEq, Deserialize, Data)]
+        #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
         #[serde(rename_all = "camelCase")]
         pub struct Root {
             pub lyrics: Lyrics,
         }
 
-        #[derive(Default, Debug, Clone, PartialEq, Deserialize, Data)]
+        #[derive(Default, Debug, Clone, PartialEq, Deserialize)]
         #[serde(rename_all = "camelCase")]
         pub struct Lyrics {
             pub lines: Vector<TrackLines>,
@@ -2028,7 +2023,7 @@ impl WebApi {
 /// View endpoints.
 impl WebApi {
     pub fn get_user_info(&self) -> Result<(String, String), Error> {
-        #[derive(Deserialize, Clone, Data)]
+        #[derive(Deserialize, Clone)]
         struct User {
             region: String,
             timezone: String,
@@ -2492,11 +2487,11 @@ impl WebApi {
 
 /// Image endpoints.
 impl WebApi {
-    pub fn get_cached_image(&self, uri: &Arc<str>) -> Option<ImageBuf> {
+    pub fn get_cached_image(&self, uri: &Arc<str>) -> Option<DynamicImage> {
         self.cache.get_image(uri)
     }
 
-    pub fn get_image(&self, uri: Arc<str>) -> Result<ImageBuf, Error> {
+    pub fn get_image(&self, uri: Arc<str>) -> Result<DynamicImage, Error> {
         if let Some(cached_image) = self.cache.get_image(&uri) {
             return Ok(cached_image);
         }
@@ -2542,9 +2537,8 @@ impl WebApi {
         } else {
             image::load_from_memory(&body)?
         };
-        let image_buf = ImageBuf::from_dynamic_image(image);
-        self.cache.set_image(uri, image_buf.clone());
-        Ok(image_buf)
+        self.cache.set_image(uri, image.clone());
+        Ok(image)
     }
 }
 

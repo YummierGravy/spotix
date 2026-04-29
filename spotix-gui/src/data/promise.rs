@@ -1,9 +1,7 @@
-use druid::Data;
-
 use crate::error::Error;
 
-#[derive(Clone, Debug, Data, Default)]
-pub enum Promise<T: Data, D: Data = (), E: Data = Error> {
+#[derive(Clone, Debug, Default)]
+pub enum Promise<T, D = (), E = Error> {
     #[default]
     Empty,
     Deferred {
@@ -27,7 +25,7 @@ pub enum PromiseState {
     Rejected,
 }
 
-impl<T: Data, D: Data, E: Data> Promise<T, D, E> {
+impl<T, D, E> Promise<T, D, E> {
     pub fn state(&self) -> PromiseState {
         match self {
             Self::Empty => PromiseState::Empty,
@@ -108,7 +106,7 @@ impl<T: Data, D: Data, E: Data> Promise<T, D, E> {
     }
 }
 
-impl<D: Data + Default, T: Data, E: Data> Promise<T, D, E> {
+impl<D: Default, T, E> Promise<T, D, E> {
     pub fn defer_default(&mut self) {
         *self = Self::Deferred { def: D::default() };
     }

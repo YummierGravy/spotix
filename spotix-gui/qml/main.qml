@@ -40,7 +40,7 @@ ApplicationWindow {
     Component.onCompleted: {
         root.spotix.refreshSession()
         root.spotix.loadLibrary()
-        keyboardRoot.forceActiveFocus()
+        root.refocusKeyboard()
     }
 
     function formatTime(ms) {
@@ -336,6 +336,10 @@ ApplicationWindow {
         return root.spotix.now_playing_title + " :: " + root.spotix.now_playing_artist + (root.spotix.now_playing_album.length > 0 ? " / " + root.spotix.now_playing_album : "")
     }
 
+    function refocusKeyboard() {
+        keyboardRoot.forceActiveFocus()
+    }
+
     Timer {
         interval: 500
         running: true
@@ -394,7 +398,7 @@ ApplicationWindow {
                 root.spotix.refreshSession()
                 event.accepted = true
             } else if (event.key === Qt.Key_Escape) {
-                keyboardRoot.forceActiveFocus()
+                root.refocusKeyboard()
                 event.accepted = true
             }
         }
@@ -472,7 +476,7 @@ ApplicationWindow {
                             onClicked: {
                                 root.spotix.navigateToRoute("login")
                                 root.activePane = "detail"
-                                keyboardRoot.forceActiveFocus()
+                                root.refocusKeyboard()
                             }
                         }
                     }
@@ -496,7 +500,7 @@ ApplicationWindow {
                         onAccepted: {
                             root.spotix.navigateToRoute("search")
                             root.spotix.submitSearch()
-                            keyboardRoot.forceActiveFocus()
+                            root.refocusKeyboard()
                         }
                     }
 
@@ -525,7 +529,7 @@ ApplicationWindow {
                             onClicked: {
                                 root.spotix.navigateToRoute("search")
                                 root.spotix.submitSearch()
-                                keyboardRoot.forceActiveFocus()
+                                root.refocusKeyboard()
                             }
                         }
                     }
@@ -605,7 +609,7 @@ ApplicationWindow {
                                         treeList.currentIndex = index
                                         root.selectedTreeId = modelData.id
                                         root.activateTreeItem(modelData)
-                                        keyboardRoot.forceActiveFocus()
+                                        root.refocusKeyboard()
                                     }
                                 }
                             }
@@ -694,7 +698,7 @@ ApplicationWindow {
                                     }
                                     onAccepted: {
                                         root.spotix.saveAccountKey(text)
-                                        keyboardRoot.forceActiveFocus()
+                                        root.refocusKeyboard()
                                     }
                                 }
 
@@ -720,7 +724,7 @@ ApplicationWindow {
                                         hoverEnabled: true
                                         onClicked: {
                                             root.spotix.saveAccountKey(accountKeyField.text)
-                                            keyboardRoot.forceActiveFocus()
+                                            root.refocusKeyboard()
                                         }
                                     }
                                 }
@@ -799,7 +803,7 @@ ApplicationWindow {
                                         if (modelData.playable || modelData.kind === "action" || modelData.kind === "album" || modelData.kind === "artist" || modelData.kind === "playlist" || modelData.kind === "show") {
                                             root.spotix.activateDetailRow(modelData.id)
                                         }
-                                        keyboardRoot.forceActiveFocus()
+                                        root.refocusKeyboard()
                                     }
                                 }
                             }
@@ -916,7 +920,7 @@ ApplicationWindow {
                                         enabled: root.spotix.saved_track_id.length > 0 && !root.spotix.now_playing_saved_busy
                                         onClicked: {
                                             root.spotix.toggleNowPlayingSaved()
-                                            keyboardRoot.forceActiveFocus()
+                                            root.refocusKeyboard()
                                         }
                                     }
                                 }
@@ -961,7 +965,7 @@ ApplicationWindow {
                                         } else if (modelData.command === "shuffle") {
                                             root.spotix.toggleShuffle()
                                         }
-                                        keyboardRoot.forceActiveFocus()
+                                        root.refocusKeyboard()
                                     }
                                 }
                             }

@@ -5,20 +5,19 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use druid::{Data, Lens, im::Vector};
+use im::Vector;
 use sanitize_html::rules::predefined::DEFAULT;
 use sanitize_html::sanitize_str;
 use serde::{Deserialize, Deserializer, Serialize};
 use time::{Date, Month};
 
-#[derive(Clone, Data, Lens)]
-pub struct Cached<T: Data> {
+#[derive(Clone)]
+pub struct Cached<T> {
     pub data: T,
-    #[data(ignore)]
     pub cached_at: Option<SystemTime>,
 }
 
-impl<T: Data> Cached<T> {
+impl<T> Cached<T> {
     pub fn new(data: T, at: SystemTime) -> Self {
         Self {
             data,
@@ -33,7 +32,7 @@ impl<T: Data> Cached<T> {
         }
     }
 
-    pub fn map<U: Data>(self, f: impl Fn(T) -> U) -> Cached<U> {
+    pub fn map<U>(self, f: impl Fn(T) -> U) -> Cached<U> {
         Cached {
             data: f(self.data),
             cached_at: self.cached_at,
@@ -49,7 +48,7 @@ pub struct Page<T: Clone> {
     pub total: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Data, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct Image {
     pub url: Arc<str>,
     pub width: Option<usize>,
@@ -78,7 +77,7 @@ pub fn default_str() -> Arc<str> {
     "".into()
 }
 
-#[derive(Copy, Clone, Default, Debug, Data, Deserialize)]
+#[derive(Copy, Clone, Default, Debug, Deserialize)]
 pub struct Float64(pub f64);
 
 impl PartialEq for Float64 {

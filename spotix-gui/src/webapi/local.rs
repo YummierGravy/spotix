@@ -9,7 +9,7 @@ use std::{
     vec::Vec,
 };
 
-use druid::im::Vector;
+use im::Vector;
 use serde::Deserialize;
 use serde_json::Value;
 

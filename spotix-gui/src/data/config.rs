@@ -9,7 +9,6 @@ use std::{
 #[cfg(target_family = "unix")]
 use std::os::unix::fs::OpenOptionsExt;
 
-use druid::{Data, Lens, Size};
 use platform_dirs::AppDirs;
 use rand::Rng;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -23,12 +22,10 @@ use spotix_core::{
 };
 
 use super::{Nav, Promise, QueueBehavior, SliderScrollScale};
-use crate::ui::theme;
 
-#[derive(Clone, Debug, Data, Lens)]
+#[derive(Clone, Debug)]
 pub struct Preferences {
     pub active: PreferencesTab,
-    #[data(ignore)]
     pub cache: Option<CacheHandle>,
     pub cache_usage: Promise<CacheUsage, (), ()>,
     pub auth: Authentication,
@@ -78,7 +75,7 @@ impl Preferences {
     }
 }
 
-#[derive(Clone, Debug, Data, Lens, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct CacheUsage {
     pub total: u64,
     pub audio: u64,
@@ -87,7 +84,19 @@ pub struct CacheUsage {
     pub other: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Data)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WindowSize {
+    pub width: f64,
+    pub height: f64,
+}
+
+impl WindowSize {
+    pub const fn new(width: f64, height: f64) -> Self {
+        Self { width, height }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PreferencesTab {
     General,
     Playback,
@@ -96,15 +105,13 @@ pub enum PreferencesTab {
     About,
 }
 
-#[derive(Clone, Debug, Data, Lens)]
+#[derive(Clone, Debug)]
 pub struct Authentication {
     pub username: String,
     pub password: String,
     pub access_token: String,
     pub result: Promise<(), (), String>,
-    #[data(ignore)]
     pub lastfm_api_key_input: String,
-    #[data(ignore)]
     pub lastfm_api_secret_input: String,
 }
 
@@ -149,12 +156,10 @@ const APP_NAME: &str = "Spotix";
 const CONFIG_FILENAME: &str = "config.json";
 const PROXY_ENV_VAR: &str = "SOCKS_PROXY";
 
-#[derive(Clone, Debug, Data, Lens, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    #[data(ignore)]
     credentials: Option<Credentials>,
-    #[data(ignore)]
     oauth_token: Option<OAuthToken>,
     pub device_id: Option<String>,
     pub audio_quality: AudioQuality,
@@ -164,7 +169,7 @@ pub struct Config {
     pub last_route: Option<Nav>,
     pub queue_behavior: QueueBehavior,
     pub show_track_cover: bool,
-    pub window_size: Size,
+    pub window_size: WindowSize,
     pub slider_scroll_scale: SliderScrollScale,
     pub sort_order: SortOrder,
     pub sort_criteria: SortCriteria,
@@ -191,7 +196,7 @@ pub struct Config {
     pub dynamic_playing_bar: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Data, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LyricsAppearance {
     #[default]
     Default,
@@ -211,7 +216,7 @@ impl Default for Config {
             last_route: Default::default(),
             queue_behavior: Default::default(),
             show_track_cover: Default::default(),
-            window_size: Size::new(theme::grid(80.0), theme::grid(100.0)),
+            window_size: WindowSize::new(640.0, 800.0),
             slider_scroll_scale: Default::default(),
             sort_order: Default::default(),
             sort_criteria: Default::default(),
@@ -391,7 +396,7 @@ impl Config {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Data, Serialize, Deserialize, Default)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 pub enum AudioQuality {
     Low,
     Normal,
@@ -399,7 +404,7 @@ pub enum AudioQuality {
     High,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Data, Serialize, Deserialize, Default)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 pub enum PlaybackEngine {
     Native,
     #[default]
@@ -416,7 +421,7 @@ impl AudioQuality {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Data, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum EqPreset {
     Flat,
     Acoustic,
@@ -459,7 +464,7 @@ impl EqPreset {
     }
 }
 
-#[derive(Clone, Debug, Data, Lens, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct EqSettings {
     pub enabled: bool,
     pub preset: EqPreset,
@@ -492,7 +497,7 @@ impl EqSettings {
     }
 }
 
-#[derive(Clone, Debug, Data, Lens, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct EqBands {
     pub band_31: f64,
     pub band_62: f64,
@@ -591,7 +596,7 @@ impl EqBands {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Data, Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub enum Theme {
     Light,
     #[default]
@@ -626,14 +631,14 @@ impl<'de> Deserialize<'de> for Theme {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Data, Serialize, Deserialize, Default)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 pub enum SortOrder {
     #[default]
     Ascending,
     Descending,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Data, Serialize, Deserialize, Default)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 pub enum SortCriteria {
     Title,
     Artist,

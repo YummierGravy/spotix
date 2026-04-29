@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use druid::Data;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -9,7 +8,7 @@ use crate::data::{AlbumLink, ArtistLink, PlaylistLink, ShowLink};
 
 use super::RecommendationsRequest;
 
-#[derive(Copy, Clone, Debug, Data, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Route {
     Home,
     Lyrics,
@@ -24,7 +23,7 @@ pub enum Route {
     Recommendations,
 }
 
-#[derive(Clone, Debug, Data, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Nav {
     #[default]
     Home,
@@ -90,7 +89,7 @@ impl Nav {
     }
 }
 
-#[derive(Clone, Debug, Data, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum SpotifyUrl {
     Playlist(Arc<str>),
     Artist(Arc<str>),

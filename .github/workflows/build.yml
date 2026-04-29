@@ -26,7 +26,7 @@ jobs:
 
       - name: Install Linux Dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libssl-dev libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libasound2-dev
 
       - name: Check Formatting
         run: cargo clippy -- -D warnings
@@ -109,9 +109,9 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           mkdir -p spotix-gui/target/release
-          lipo -create -output spotix-gui/target/release/spotix-gui \
-            target/x86_64-apple-darwin/release/spotix-gui \
-            target/aarch64-apple-darwin/release/spotix-gui
+          lipo -create -output spotix-gui/target/release/spotix \
+            target/x86_64-apple-darwin/release/spotix \
+            target/aarch64-apple-darwin/release/spotix
 
       - name: Bundle macOS Release
         if: runner.os == 'macOS'
@@ -144,11 +144,7 @@ jobs:
 
       - name: Make Linux Binary Executable
         if: runner.os == 'Linux'
-        run: chmod +x target/${{ matrix.target }}/release/spotix-gui
-
-      - name: Rename Linux Binary
-        if: runner.os == 'Linux'
-        run: mv target/${{ matrix.target }}/release/spotix-gui target/${{ matrix.target }}/release/spotix
+        run: chmod +x target/${{ matrix.target }}/release/spotix
 
       - name: Upload Linux Binary
         uses: actions/upload-artifact@v4
@@ -162,7 +158,7 @@ jobs:
         if: runner.os == 'Windows'
         with:
           name: Spotix.exe
-          path: target/release/spotix-gui.exe
+          path: target/release/spotix.exe
 
   deb:
     if: github.ref == 'refs/heads/release' && github.event_name == 'push'
@@ -314,7 +310,7 @@ jobs:
           mkdir -p artifacts_final
 
           find artifacts -type f -name 'Spotix.dmg' -exec mv {} artifacts_final/Spotix.dmg \;
-          find artifacts -type f -name 'spotix-gui.exe' -exec mv {} artifacts_final/Spotix.exe \;
+          find artifacts -type f -name 'spotix.exe' -exec mv {} artifacts_final/Spotix.exe \;
           find artifacts -type f -name 'spotix-amd64.deb' -exec mv {} artifacts_final/spotix-amd64.deb \;
           find artifacts -type f -name 'spotix-arm64.deb' -exec mv {} artifacts_final/spotix-arm64.deb \;
 

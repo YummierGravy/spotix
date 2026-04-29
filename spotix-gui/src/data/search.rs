@@ -1,17 +1,10 @@
 use std::sync::Arc;
 
-use druid::{Data, Lens, im::Vector};
+use im::Vector;
 
-use crate::data::{Album, Artist, Playlist, Promise, Show, Track};
+use crate::data::{Album, Artist, Playlist, Show, Track};
 
-#[derive(Clone, Data, Lens)]
-pub struct Search {
-    pub input: String,
-    pub topic: Option<SearchTopic>,
-    pub results: Promise<SearchResults, (Arc<str>, Option<SearchTopic>)>,
-}
-
-#[derive(Copy, Clone, Data, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub enum SearchTopic {
     Artist,
     Album,
@@ -52,7 +45,7 @@ impl SearchTopic {
     }
 }
 
-#[derive(Clone, Data, Lens)]
+#[derive(Clone)]
 pub struct SearchResults {
     pub query: Arc<str>,
     pub topic: Option<SearchTopic>,

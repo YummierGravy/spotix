@@ -52,18 +52,8 @@ Grab the latest installers from the [Releases page](https://github.com/skyline69
 - Rust stable (1.65.0 or newer)
 
 ### Linux dependencies
-- Debian/Ubuntu: `sudo apt-get install libssl-dev libgtk-3-dev libcairo2-dev libasound2-dev`
-- RHEL/Fedora: `sudo dnf install openssl-devel gtk3-devel cairo-devel alsa-lib-devel`
-
-### OpenBSD (WIP)
-```shell
-doas pkg_add gtk+3 cairo llvm
-export LIBCLANG_PATH=/usr/local/lib
-```
-If you hit rustc memory errors while building gtk:
-```shell
-ulimit -d $(( 2 * `ulimit -d` ))
-```
+- Debian/Ubuntu: `sudo apt-get install libssl-dev libasound2-dev`
+- RHEL/Fedora: `sudo dnf install openssl-devel alsa-lib-devel`
 
 ### Install from source
 ```shell
@@ -179,7 +169,7 @@ status_text_color = "#bac2de"
 
 ## Project layout
 - `/spotix-core` core library (session, decoding, playback)
-- `/spotix-gui` GUI app (Druid) — binary name: `spotix`
+- `/spotix-gui` Qt/QML GUI app — binary name: `spotix`
 
 ## Privacy
 Spotix connects only to official Spotify servers.
@@ -188,5 +178,4 @@ Cached data is stored locally and can be deleted at any time.
 
 ## Credits
 - librespot: https://github.com/librespot-org/librespot
-- druid: https://github.com/linebender/druid
 - ncspot: https://github.com/hrkfdn/ncspot

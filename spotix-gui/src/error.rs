@@ -1,8 +1,6 @@
 use std::{error, fmt};
 
-use druid::Data;
-
-#[derive(Clone, Debug, Data)]
+#[derive(Clone, Debug)]
 pub enum Error {
     WebApiError(String),
 }

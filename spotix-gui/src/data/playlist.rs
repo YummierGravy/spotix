@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use druid::{
-    Data, Lens,
-    im::{HashSet, Vector},
-};
+use im::{HashSet, Vector};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::data::utils::{Page, sanitize_html_string};
@@ -13,38 +10,38 @@ use crate::data::{
     user::PublicUser,
 };
 
-#[derive(Clone, Debug, Data, Lens)]
+#[derive(Clone, Debug)]
 pub struct PlaylistDetail {
     pub playlist: Promise<Playlist, PlaylistLink>,
     pub tracks: Promise<PlaylistTracks, (PlaylistLink, SortCriteria, SortOrder, bool)>,
 }
 
-#[derive(Clone, Debug, Data, Lens, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct PlaylistAddTrack {
     pub link: PlaylistLink,
     pub track_id: TrackId,
 }
 
-#[derive(Clone, Debug, Data, Lens, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct PlaylistRemoveTrack {
     pub link: PlaylistLink,
     pub track_id: TrackId,
     pub track_pos: usize,
 }
 
-#[derive(Clone, Debug, Data, Lens, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct PlaylistRemoveTrackItem {
     pub track_id: TrackId,
     pub track_pos: usize,
 }
 
-#[derive(Clone, Debug, Data, Lens, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct PlaylistRemoveTracks {
     pub link: PlaylistLink,
     pub items: Vector<PlaylistRemoveTrackItem>,
 }
 
-#[derive(Clone, Debug, Data, Lens, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Playlist {
     pub id: Arc<str>,
     pub name: Arc<str>,
@@ -80,7 +77,7 @@ impl Playlist {
     }
 }
 
-#[derive(Clone, Debug, Data, Lens)]
+#[derive(Clone, Debug)]
 pub struct PlaylistTracks {
     pub id: Arc<str>,
     pub name: Arc<str>,
@@ -133,7 +130,7 @@ impl PlaylistTracks {
     }
 }
 
-#[derive(Clone, Debug, Data, Lens, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct PlaylistLink {
     pub id: Arc<str>,
     pub name: Arc<str>,

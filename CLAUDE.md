@@ -12,8 +12,8 @@ cargo build
 cargo build --release
 
 # Run the GUI app
-cargo run --bin spotix-gui
-cargo run --bin spotix-gui --release
+cargo run -p spotix-gui --bin spotix
+cargo run -p spotix-gui --bin spotix --release
 
 # Run the CLI example
 cargo run --bin spotix-cli
@@ -33,12 +33,12 @@ cargo bundle --release
 
 **Linux (Debian/Ubuntu):**
 ```bash
-sudo apt-get install libssl-dev libgtk-3-dev libcairo2-dev libasound2-dev
+sudo apt-get install libssl-dev libasound2-dev
 ```
 
 **Linux (RHEL/Fedora):**
 ```bash
-sudo dnf install openssl-devel gtk3-devel cairo-devel alsa-lib-devel
+sudo dnf install openssl-devel alsa-lib-devel
 ```
 
 **Qt 6 scaffold:**
@@ -57,13 +57,9 @@ Core library handling Spotify connectivity and audio:
 - `cache.rs`, `cdn.rs` - Track caching and CDN file fetching
 
 ### spotix-gui
-Qt 6/QML GUI application, with the previous Druid UI preserved temporarily as `spotix-druid` during migration:
-- `ui/` - View modules for each screen (home, library, playlist, album, artist, lyrics, preferences, etc.)
-- `controller/` - Event handlers including `playback.rs` (main playback controller, ~59k lines)
+Qt 6/QML GUI application:
 - `data/` - Application state models and configuration (`config.rs` for user preferences)
-- `widget/` - Custom Druid widgets
 - `webapi/` - Spotify Web API client
-- `delegate.rs` - Main Druid app delegate connecting UI to core
 - `src/bin/spotix.rs`, `src/bin/spotix-qt.rs`, `src/qt/`, `qml/` - Qt 6/QML primary UI using CXX-Qt
 
 ### spotix-cli

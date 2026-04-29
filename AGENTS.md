@@ -15,7 +15,7 @@ It summarizes the commands, repository layout, and coding conventions that are m
 - Root `Cargo.toml` is a virtual workspace manifest.
 - Workspace members are `spotix-core` and `spotix-gui`.
 - `spotix-core` contains Spotify session, connection, cache, audio, metadata, and player logic.
-- `spotix-gui` contains the Druid desktop app and the `spotix` binary.
+- `spotix-gui` contains the Qt/QML desktop app and the `spotix` binary.
 - Intentional patch/vendor crates live beside the workspace: `rspotify-model-patch`, `librespot-playback-patch`, and `vendor/wrapped-vec`.
 - Do not edit patch/vendor crates unless the change truly belongs upstream or in the patched dependency itself.
 - Patch/vendor crates are not normal workspace members; use `--manifest-path` when building or testing them directly.
@@ -25,12 +25,12 @@ It summarizes the commands, repository layout, and coding conventions that are m
 - Use stable Rust; root docs mention Rust `1.65+`, but patched dependencies may need newer stable toolchains.
 - Workspace crates use edition `2024`; some patch/vendor crates still use older editions.
 - Linux system dependencies:
-  - Debian/Ubuntu: `sudo apt-get install libssl-dev libgtk-3-dev libcairo2-dev libasound2-dev`
-  - Fedora/RHEL: `sudo dnf install openssl-devel gtk3-devel cairo-devel alsa-lib-devel`
+ - Debian/Ubuntu: `sudo apt-get install libssl-dev libasound2-dev`
+ - Fedora/RHEL: `sudo dnf install openssl-devel alsa-lib-devel`
 - Qt scaffold dependencies:
  - Install Qt 6 development tools, including `qmake6`, Qt Quick, Qt Quick Controls 2, Qt Network, CMake, a C++ compiler, and `clang-format`.
  - If both Qt 5 and Qt 6 are installed, set `QMAKE=/path/to/qmake6` or `QT_VERSION_MAJOR=6` before building the Qt scaffold.
-- Cross-compilation for Linux uses `Cross.toml` and installs GTK/OpenSSL/ALSA dev packages in the image.
+- Cross-compilation for Linux uses `Cross.toml` and installs OpenSSL/ALSA dev packages in the image.
 - macOS bundling is done from `spotix-gui/` with `cargo-bundle`.
 
 ## Canonical Build Commands
@@ -42,8 +42,6 @@ Run these from the repository root unless noted otherwise.
 - Build the GUI with the alternate audio backend: `cargo build -p spotix-gui --no-default-features --features cubeb`
 - Build the Qt 6/QML GUI: `cargo build -p spotix-gui --bin spotix`
 - Run the Qt 6/QML GUI: `cargo run -p spotix-gui --bin spotix`
-- Build the legacy Druid GUI during migration: `cargo build -p spotix-gui --bin spotix-druid`
-- Run the legacy Druid GUI during migration: `cargo run -p spotix-gui --bin spotix-druid`
 - Run the GUI app in release mode: `cargo run -p spotix-gui --release --bin spotix`
 - Install the app locally from source: `cargo install --locked --path spotix-gui`
 - Build the macOS bundle from `spotix-gui/`: `cargo bundle --release`
@@ -106,8 +104,8 @@ Because these crates are outside the workspace, address them explicitly.
 - Preserve existing module boundaries instead of stuffing unrelated logic into large files.
 
 ## Code Style: Types and Data Modeling
-- Derive traits aggressively when they add value: `Clone`, `Debug`, `Default`, `Serialize`, `Deserialize`, `Data`, `Lens`, `Eq`, `PartialEq`.
-- In GUI state, prefer `druid::Data`-friendly shapes and shared ownership such as `Arc<T>` when data is shown in multiple places.
+- Derive traits aggressively when they add value: `Clone`, `Debug`, `Default`, `Serialize`, `Deserialize`, `Eq`, `PartialEq`.
+- In GUI state, prefer Qt-friendly DTOs and shared ownership such as `Arc<T>` when data is shown in multiple places.
 - Use enums for small closed sets of options such as `AudioQuality`, `PlaybackEngine`, or `PreferencesTab`.
 - Derive `Copy` for lightweight enums and value types when it simplifies call sites and matches existing code.
 - Keep config fallback logic in helper methods instead of duplicating it at every call site.
@@ -139,5 +137,5 @@ Because these crates are outside the workspace, address them explicitly.
 - Check whether a change belongs in workspace code or in a patched dependency before editing files outside `spotix-core` or `spotix-gui`.
 - Preserve platform support; avoid Linux-only or macOS-only assumptions unless the code is already gated by `cfg`.
 - If you touch audio, session, playback, or cache code, prefer validating with both `cargo build` and a targeted `cargo clippy` run.
-- If you touch GUI state types, watch for `druid::Data` and serialization derives so state remains cloneable, comparable, and storable.
+- If you touch GUI state types, watch serialization derives so state remains cloneable, comparable, and storable.
 - If you touch patch/vendor manifests, verify whether the real change belongs in `Cargo.toml.orig` instead of the normalized `Cargo.toml`.

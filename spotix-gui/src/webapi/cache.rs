@@ -7,15 +7,14 @@ use std::{
     sync::Arc,
 };
 
-use druid::ImageBuf;
-use druid::image;
+use image::DynamicImage;
 use lru::LruCache;
 use parking_lot::Mutex;
 use spotix_core::cache::mkdir_if_not_exists;
 
 pub struct WebApiCache {
     base: Option<PathBuf>,
-    images: Mutex<LruCache<Arc<str>, ImageBuf>>,
+    images: Mutex<LruCache<Arc<str>, DynamicImage>>,
 }
 
 impl WebApiCache {
@@ -27,20 +26,19 @@ impl WebApiCache {
         }
     }
 
-    pub fn get_image(&self, uri: &Arc<str>) -> Option<ImageBuf> {
+    pub fn get_image(&self, uri: &Arc<str>) -> Option<DynamicImage> {
         self.images.lock().get(uri).cloned()
     }
 
-    pub fn set_image(&self, uri: Arc<str>, image: ImageBuf) {
+    pub fn set_image(&self, uri: Arc<str>, image: DynamicImage) {
         self.images.lock().put(uri, image);
     }
 
-    pub fn get_image_from_disk(&self, uri: &Arc<str>) -> Option<ImageBuf> {
+    pub fn get_image_from_disk(&self, uri: &Arc<str>) -> Option<DynamicImage> {
         let hash = Self::hash_uri(uri);
         self.key("images", &format!("{hash:016x}"))
             .and_then(|path| std::fs::read(path).ok())
             .and_then(|bytes| image::load_from_memory(&bytes).ok())
-            .map(ImageBuf::from_dynamic_image)
     }
 
     pub fn save_image_to_disk(&self, uri: &Arc<str>, data: &[u8]) {

@@ -1,13 +1,8 @@
 use std::f64;
 
-use druid::Lens;
+use serde::{Deserialize, Serialize};
 
-use {
-    druid::Data,
-    serde::{Deserialize, Serialize},
-};
-
-#[derive(Clone, Debug, Data, Lens, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SliderScrollScale {
     // Volume percentage per 'bump' of the wheel(s)
     pub scale: f64,

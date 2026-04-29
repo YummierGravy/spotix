@@ -20,19 +20,21 @@ ApplicationWindow {
     property string selectedTreeId: "route:home"
     property int treeRevision: 0
     property int playingTick: 0
-    property color terminalBg: "#050505"
-    property color panelBg: "#0b0f10"
-    property color panelAlt: "#111718"
-    property color borderColor: "#2f3b3d"
-    property color textColor: "#d8dee9"
-    property color dimText: "#839496"
-    property color accent: "#00ff87"
-    property color cyan: "#00d7ff"
-    property color kdeBlue: "#3daee9"
-    property color kdeViolet: "#9b59b6"
-    property color warn: "#ffd75f"
-    property color error: "#ff5f5f"
-    property color selection: "#183a3a"
+    property color terminalBg: "#181a20"
+    property color panelBg: "#20232b"
+    property color panelAlt: "#272b34"
+    property color controlBg: "#242832"
+    property color controlHover: "#303644"
+    property color borderColor: "#596172"
+    property color textColor: "#d7dce7"
+    property color dimText: "#9aa3b5"
+    property color accent: "#a6d4ff"
+    property color cyan: "#9adbcf"
+    property color kdeBlue: "#8fb8e8"
+    property color kdeViolet: "#c7a0d9"
+    property color warn: "#e6c987"
+    property color error: "#e89a9a"
+    property color selection: "#343b4a"
     property int rowHeight: 28
 
     Component.onCompleted: {
@@ -420,7 +422,7 @@ ApplicationWindow {
                         Layout.fillHeight: true
                         Layout.topMargin: 5
                         Layout.bottomMargin: 5
-                        color: accountMouse.containsMouse ? "#10262b" : "#081113"
+                        color: accountMouse.containsMouse ? controlHover : controlBg
                         border.color: accountMouse.containsMouse ? accent : kdeBlue
                         border.width: 1
 
@@ -487,7 +489,7 @@ ApplicationWindow {
                         font.family: "monospace"
                         font.pixelSize: 15
                         background: Rectangle {
-                            color: "#000000"
+                            color: panelAlt
                             border.color: searchField.activeFocus ? accent : borderColor
                         }
                         onTextChanged: root.spotix.search_query = text
@@ -503,7 +505,7 @@ ApplicationWindow {
                         Layout.fillHeight: true
                         Layout.topMargin: 5
                         Layout.bottomMargin: 5
-                        color: searchMouse.containsMouse ? "#10262b" : "#081113"
+                        color: searchMouse.containsMouse ? controlHover : controlBg
                         border.color: searchMouse.containsMouse ? accent : kdeBlue
                         border.width: 1
 
@@ -658,7 +660,7 @@ ApplicationWindow {
                             Layout.fillWidth: true
                             Layout.preferredHeight: root.isAccountRoute() ? 58 : 0
                             visible: root.isAccountRoute()
-                            color: "#0b1518"
+                            color: panelAlt
                             border.color: borderColor
                             border.width: 1
 
@@ -687,7 +689,7 @@ ApplicationWindow {
                                     font.family: "monospace"
                                     font.pixelSize: 13
                                     background: Rectangle {
-                                        color: "#000000"
+                                        color: panelBg
                                         border.color: accountKeyField.activeFocus ? accent : borderColor
                                     }
                                     onAccepted: {
@@ -699,7 +701,7 @@ ApplicationWindow {
                                 Rectangle {
                                     Layout.preferredWidth: 84
                                     Layout.fillHeight: true
-                                    color: saveKeyMouse.containsMouse ? "#10262b" : "#081113"
+                                    color: saveKeyMouse.containsMouse ? controlHover : controlBg
                                     border.color: saveKeyMouse.containsMouse ? accent : kdeBlue
                                     border.width: 1
 
@@ -809,7 +811,7 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 232
-                color: "#071013"
+                color: panelBg
                 border.color: kdeBlue
                 border.width: 1
 
@@ -838,7 +840,7 @@ ApplicationWindow {
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 34
-                            color: "#0b1518"
+                            color: panelAlt
                             border.color: borderColor
                             border.width: 1
 
@@ -893,8 +895,8 @@ ApplicationWindow {
                                 Rectangle {
                                     Layout.preferredWidth: 48
                                     Layout.preferredHeight: 24
-                                    color: savedMouse.containsMouse ? "#10262b" : "#081113"
-                                    border.color: root.spotix.now_playing_saved ? accent : mutedText
+                                    color: savedMouse.containsMouse ? controlHover : controlBg
+                                    border.color: root.spotix.now_playing_saved ? accent : dimText
                                     border.width: 1
                                     opacity: root.spotix.saved_track_id.length > 0 ? 1.0 : 0.45
 
@@ -932,7 +934,7 @@ ApplicationWindow {
                             delegate: Rectangle {
                                 Layout.preferredWidth: 82
                                 Layout.preferredHeight: 34
-                                color: controlMouse.containsMouse ? "#10262b" : "#081113"
+                                color: controlMouse.containsMouse ? controlHover : controlBg
                                 border.color: controlMouse.containsMouse ? accent : kdeBlue
                                 border.width: 1
 
@@ -1078,7 +1080,7 @@ ApplicationWindow {
                     anchors.margins: 10
                     width: 250
                     height: parent.height - 20
-                    color: "#050909"
+                    color: panelAlt
                     border.color: borderColor
                     border.width: 1
 

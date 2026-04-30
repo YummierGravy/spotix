@@ -641,9 +641,12 @@ ApplicationWindow {
                             onModelChanged: Qt.callLater(root.restoreTreeSelection)
 
                             delegate: Rectangle {
-                                width: treeList.width
+                                id: treeDelegate
+                                property var view: ListView.view
+                                property var appRoot: view.appRoot
+                                width: view.width
                                 height: rowHeight
-                                color: ListView.isCurrentItem && treeList.appRoot.activePane === "tree" ? selection : "transparent"
+                                color: ListView.isCurrentItem && appRoot.activePane === "tree" ? selection : "transparent"
 
                                 RowLayout {
                                     anchors.fill: parent
@@ -654,8 +657,8 @@ ApplicationWindow {
                                     Label {
                                         Layout.preferredWidth: 42
                                         Layout.preferredHeight: parent.height
-                                        visible: !treeList.appRoot.hasTreeChildren(modelData.id) && treeList.appRoot.shouldShowCoverAscii(modelData)
-                                        text: treeList.appRoot.coverAscii(modelData)
+                                        visible: !treeDelegate.appRoot.hasTreeChildren(modelData.id) && treeDelegate.appRoot.shouldShowCoverAscii(modelData)
+                                        text: treeDelegate.appRoot.coverAscii(modelData)
                                         textFormat: Text.RichText
                                         color: kdeViolet
                                         horizontalAlignment: Text.AlignHCenter
@@ -667,7 +670,7 @@ ApplicationWindow {
 
                                     Label {
                                         Layout.fillWidth: true
-                                        text: treeList.appRoot.treePrefix(modelData) + modelData.label
+                                        text: treeDelegate.appRoot.treePrefix(modelData) + modelData.label
                                         color: ListView.isCurrentItem ? accent : textColor
                                         elide: Text.ElideRight
                                         font.family: "monospace"
@@ -686,11 +689,11 @@ ApplicationWindow {
                                 MouseArea {
                                     anchors.fill: parent
                                     onClicked: {
-                                        treeList.appRoot.activePane = "tree"
-                                        treeList.currentIndex = index
-                                        treeList.appRoot.selectedTreeId = modelData.id
-                                        treeList.appRoot.activateTreeItem(modelData)
-                                        treeList.appRoot.refocusKeyboard()
+                                        treeDelegate.appRoot.activePane = "tree"
+                                        treeDelegate.view.currentIndex = index
+                                        treeDelegate.appRoot.selectedTreeId = modelData.id
+                                        treeDelegate.appRoot.activateTreeItem(modelData)
+                                        treeDelegate.appRoot.refocusKeyboard()
                                     }
                                 }
                             }
@@ -838,19 +841,22 @@ ApplicationWindow {
                             boundsBehavior: Flickable.StopAtBounds
 
                             delegate: Rectangle {
-                                width: detailList.width
+                                id: detailDelegate
+                                property var view: ListView.view
+                                property var appRoot: view.appRoot
+                                width: view.width
                                 height: rowHeight
-                                color: ListView.isCurrentItem && detailList.appRoot.activePane === "detail" ? selection : "transparent"
+                                color: ListView.isCurrentItem && appRoot.activePane === "detail" ? selection : "transparent"
 
                                 RowLayout {
                                     anchors.fill: parent
-                                    anchors.leftMargin: 6
+                                    anchors.leftMargin: 2
                                     anchors.rightMargin: 6
-                                    spacing: 3
+                                    spacing: 2
 
                                     Label {
-                                        Layout.preferredWidth: 18
-                                        text: detailList.appRoot.isNowPlayingRow(modelData) ? detailList.appRoot.playingGlyph() : ""
+                                        Layout.preferredWidth: 10
+                                        text: detailDelegate.appRoot.isNowPlayingRow(modelData) ? detailDelegate.appRoot.playingGlyph() : ""
                                         color: accent
                                         horizontalAlignment: Text.AlignHCenter
                                         font.family: "monospace"
@@ -859,12 +865,12 @@ ApplicationWindow {
                                     }
 
                                     Label {
-                                        Layout.preferredWidth: 36
+                                        Layout.preferredWidth: 30
                                         Layout.preferredHeight: parent.height
-                                        visible: detailList.appRoot.shouldShowCoverAscii(modelData)
-                                        text: detailList.appRoot.coverAscii(modelData)
+                                        visible: detailDelegate.appRoot.shouldShowCoverAscii(modelData)
+                                        text: detailDelegate.appRoot.coverAscii(modelData)
                                         textFormat: Text.RichText
-                                        horizontalAlignment: Text.AlignHCenter
+                                        horizontalAlignment: Text.AlignLeft
                                         verticalAlignment: Text.AlignVCenter
                                         font.family: "monospace"
                                         font.pixelSize: 6
@@ -874,7 +880,7 @@ ApplicationWindow {
                                     Label {
                                         Layout.fillWidth: true
                                         text: modelData.label
-                                        color: detailList.appRoot.isNowPlayingRow(modelData) || ListView.isCurrentItem ? accent : textColor
+                                        color: detailDelegate.appRoot.isNowPlayingRow(modelData) || ListView.isCurrentItem ? accent : textColor
                                         elide: Text.ElideRight
                                         font.family: "monospace"
                                         font.pixelSize: 14
@@ -893,12 +899,12 @@ ApplicationWindow {
                                 MouseArea {
                                     anchors.fill: parent
                                     onClicked: {
-                                        detailList.appRoot.activePane = "detail"
-                                        detailList.currentIndex = index
+                                        detailDelegate.appRoot.activePane = "detail"
+                                        detailDelegate.view.currentIndex = index
                                         if (modelData.playable || modelData.kind === "action" || modelData.kind === "album" || modelData.kind === "artist" || modelData.kind === "playlist" || modelData.kind === "show") {
-                                            detailList.appRoot.spotix.activateDetailRow(modelData.id)
+                                            detailDelegate.appRoot.spotix.activateDetailRow(modelData.id)
                                         }
-                                        detailList.appRoot.refocusKeyboard()
+                                        detailDelegate.appRoot.refocusKeyboard()
                                     }
                                 }
                             }

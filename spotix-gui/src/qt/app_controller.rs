@@ -452,9 +452,9 @@ impl Default for SpotixAppRust {
         set_nav_state(nav_state.clone());
         let initial_detail = QtNavDocument {
             title: nav_state.current.title(),
-            status: "Use the tree or keyboard shortcuts to navigate Spotix.".to_string(),
+            status: String::new(),
             route_art_ascii: String::new(),
-            rows: home_rows(&startup.status),
+            rows: Vec::new(),
         };
         Self {
             authenticated: startup.authenticated,
@@ -1487,7 +1487,7 @@ fn push_tree_route_with_image(
 fn immediate_nav_document(target: &QtNavTarget, app: &qobject::SpotixApp) -> Option<QtNavDocument> {
     let title = target.title();
     let status = match target {
-        QtNavTarget::Home => app.status().to_string(),
+        QtNavTarget::Home => String::new(),
         QtNavTarget::Login => app.login_status().to_string(),
         QtNavTarget::Library
         | QtNavTarget::SavedTracks
@@ -1618,20 +1618,6 @@ fn load_nav_document(target: QtNavTarget) -> Result<QtNavPayload, String> {
         document,
         tracks_for_playback,
     })
-}
-
-fn home_rows(_status: &str) -> Vec<QtDetailRow> {
-    vec![
-        QtDetailRow::route(
-            "route:library",
-            "library",
-            "Library",
-            "load saved content",
-            0,
-        ),
-        QtDetailRow::route("route:search", "search", "Search", "press / to focus", 0),
-        QtDetailRow::route("route:lyrics", "lyrics", "Lyrics", "parity placeholder", 0),
-    ]
 }
 
 fn account_rows(login_error: &str) -> Vec<QtDetailRow> {

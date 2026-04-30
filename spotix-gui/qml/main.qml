@@ -20,6 +20,8 @@ ApplicationWindow {
     property string selectedTreeId: "route:saved-tracks"
     property int treeRevision: 0
     property int playingTick: 0
+    property int libraryPaneWidth: 330
+    property int footerPaneHeight: 204
     property color terminalBg: "#181a20"
     property color panelBg: "#20232b"
     property color panelAlt: "#272b34"
@@ -309,6 +311,18 @@ ApplicationWindow {
 
     function barClickRatio(mouseX, barWidth) {
         return Math.max(0, Math.min(1, (mouseX - 2) / Math.max(1, barWidth - 4)))
+    }
+
+    function clamp(value, minValue, maxValue) {
+        return Math.max(minValue, Math.min(maxValue, value))
+    }
+
+    function footerSpacing() {
+        return Math.max(1, Math.min(8, Math.floor((root.footerPaneHeight - 140) / 20)))
+    }
+
+    function footerControlHeight() {
+        return root.footerPaneHeight <= 175 ? 26 : 30
     }
 
     function terminalBar(ratio, width, head) {
@@ -605,10 +619,12 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: 8
+                spacing: 4
 
                 Rectangle {
-                    Layout.preferredWidth: 330
+                    Layout.preferredWidth: root.libraryPaneWidth
+                    Layout.minimumWidth: 220
+                    Layout.maximumWidth: 520
                     Layout.fillHeight: true
                     color: panelBg
                     border.color: root.activePane === "tree" ? accent : borderColor
@@ -696,6 +712,30 @@ ApplicationWindow {
                                         treeDelegate.appRoot.refocusKeyboard()
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.preferredWidth: 6
+                    Layout.fillHeight: true
+                    color: splitLeftMouse.containsMouse || splitLeftMouse.pressed ? selection : borderColor
+
+                    MouseArea {
+                        id: splitLeftMouse
+                        property real startX: 0
+                        property int startWidth: 0
+                        anchors.fill: parent
+                        cursorShape: Qt.SplitHCursor
+                        hoverEnabled: true
+                        onPressed: function(mouse) {
+                            startX = mouse.x
+                            startWidth = root.libraryPaneWidth
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (pressed) {
+                                root.libraryPaneWidth = root.clamp(startWidth + mouse.x - startX, 220, Math.min(520, root.width - 520))
                             }
                         }
                     }
@@ -915,7 +955,33 @@ ApplicationWindow {
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 204
+                Layout.preferredHeight: 6
+                color: splitFooterMouse.containsMouse || splitFooterMouse.pressed ? selection : borderColor
+
+                MouseArea {
+                    id: splitFooterMouse
+                    property real startY: 0
+                    property int startHeight: 0
+                    anchors.fill: parent
+                    cursorShape: Qt.SplitVCursor
+                    hoverEnabled: true
+                    onPressed: function(mouse) {
+                        startY = mouse.y
+                        startHeight = root.footerPaneHeight
+                    }
+                    onPositionChanged: function(mouse) {
+                        if (pressed) {
+                            root.footerPaneHeight = root.clamp(startHeight - (mouse.y - startY), 150, Math.min(300, root.height - 260))
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: root.footerPaneHeight
+                Layout.minimumHeight: 150
+                Layout.maximumHeight: 300
                 color: panelBg
                 border.color: kdeBlue
                 border.width: 1
@@ -936,7 +1002,7 @@ ApplicationWindow {
                     anchors.fill: parent
                     anchors.margins: 6
                     anchors.rightMargin: artBox.width + 14
-                    spacing: 3
+                    spacing: root.footerSpacing()
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -944,7 +1010,7 @@ ApplicationWindow {
 
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 30
+                            Layout.preferredHeight: root.footerControlHeight()
                             color: panelAlt
                             border.color: borderColor
                             border.width: 1
@@ -1038,7 +1104,7 @@ ApplicationWindow {
 
                             delegate: Rectangle {
                                 Layout.preferredWidth: 82
-                                Layout.preferredHeight: 30
+                                Layout.preferredHeight: root.footerControlHeight()
                                 color: controlMouse.containsMouse ? controlHover : controlBg
                                 border.color: controlMouse.containsMouse ? accent : kdeBlue
                                 border.width: 1

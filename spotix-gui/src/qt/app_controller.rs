@@ -66,6 +66,10 @@ static SAVED_TRACK_RESULT: OnceLock<Mutex<SavedTrackResultSlot>> = OnceLock::new
 static NAV_STATE: OnceLock<Mutex<QtNavState>> = OnceLock::new();
 static PLAYBACK_CONFIGURED: OnceLock<Mutex<bool>> = OnceLock::new();
 
+const MAX_TINY_ART_CACHE_ITEMS: usize = 256;
+const MAX_TINY_ART_IN_FLIGHT: usize = 8;
+const MAX_DETAIL_ART_ROWS: usize = 120;
+
 pub fn set_startup_state(authenticated: bool, session_configured: bool) {
     let route = if authenticated { "home" } else { "login" };
     let status = if session_configured {
@@ -882,6 +886,13 @@ impl qobject::SpotixApp {
                 .expect("qt tree art cache lock poisoned");
             for (url, art) in results {
                 cache.insert(url, art);
+            }
+            if cache.len() > MAX_TINY_ART_CACHE_ITEMS {
+                let overflow = cache.len() - MAX_TINY_ART_CACHE_ITEMS;
+                let keys = cache.keys().take(overflow).cloned().collect::<Vec<_>>();
+                for key in keys {
+                    cache.remove(&key);
+                }
             }
         }
         let mut rows = parse_json_array::<QtDetailRow>(&self.detail_rows_json().to_string());
@@ -1872,13 +1883,18 @@ fn search_rows(json: &str) -> Vec<QtDetailRow> {
 fn qt_track_rows(tracks: &[QtTrack], depth: i32) -> Vec<QtDetailRow> {
     tracks
         .iter()
-        .map(|track| QtDetailRow {
+        .enumerate()
+        .map(|(index, track)| QtDetailRow {
             id: format!("track:{}", track.id),
             kind: "track".to_string(),
             label: track.title.clone(),
             meta: format!("{} | {}", track.artist, track.album),
             image_url: track.image_url.clone(),
-            art_ascii: tiny_tree_art_for_url(&track.image_url),
+            art_ascii: if index < MAX_DETAIL_ART_ROWS {
+                tiny_tree_art_for_url(&track.image_url)
+            } else {
+                String::new()
+            },
             depth,
             playable: true,
             expandable: false,
@@ -1887,7 +1903,7 @@ fn qt_track_rows(tracks: &[QtTrack], depth: i32) -> Vec<QtDetailRow> {
 }
 
 fn enrich_detail_art(rows: &mut [QtDetailRow]) {
-    for row in rows {
+    for row in rows.iter_mut().take(MAX_DETAIL_ART_ROWS) {
         if row.art_ascii.is_empty() && !row.image_url.is_empty() {
             row.art_ascii = tiny_tree_art_for_url(&row.image_url);
         }
@@ -2009,11 +2025,17 @@ fn tiny_tree_art_for_url(url: &str) -> String {
         return art;
     }
 
-    let should_spawn = TREE_ART_IN_FLIGHT
-        .get_or_init(|| Mutex::new(HashSet::new()))
-        .lock()
-        .expect("qt tree art in-flight lock poisoned")
-        .insert(url.to_string());
+    let should_spawn = {
+        let mut in_flight = TREE_ART_IN_FLIGHT
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+            .expect("qt tree art in-flight lock poisoned");
+        if in_flight.len() >= MAX_TINY_ART_IN_FLIGHT {
+            false
+        } else {
+            in_flight.insert(url.to_string())
+        }
+    };
     if should_spawn {
         let url = url.to_string();
         thread::spawn(move || {

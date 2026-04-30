@@ -14,9 +14,11 @@ use librespot_core::{
     cache::Cache as LibrespotCache, config::SessionConfig,
 };
 use librespot_playback::{
-    audio_backend,
+    audio_backend::{self, Sink, SinkResult},
     config::VolumeCtrl,
     config::{Bitrate, PlayerConfig},
+    convert::Converter,
+    decoder::AudioPacket,
     mixer::{Mixer, MixerConfig, softmixer::SoftMixer},
     player::{Player as LibrespotPlayer, PlayerEvent as LibrespotEvent},
 };
@@ -33,6 +35,7 @@ use super::{
     file::{AudioFormat, MediaPath},
     item::PlaybackItem,
 };
+use crate::audio::meter::PcmMeter;
 use crate::audio::normalize::NormalizationLevel;
 use crate::item_id::FileId;
 use crossbeam_channel::Sender;
@@ -55,6 +58,7 @@ impl LibrespotBackend {
         sender: Sender<PlayerEvent>,
         cache_dir: Option<PathBuf>,
         audio_cache_limit: Option<u64>,
+        meter: PcmMeter,
     ) -> Result<Self, Error> {
         let runtime = Runtime::new().map_err(map_error)?;
 
@@ -104,7 +108,10 @@ impl LibrespotBackend {
         })?;
         let player_config = build_player_config(config);
         let player = LibrespotPlayer::new(player_config, session, volume_getter, move || {
-            sink(None, librespot_playback::config::AudioFormat::default())
+            Box::new(MeteredSink {
+                inner: sink(None, librespot_playback::config::AudioFormat::default()),
+                meter,
+            })
         });
 
         let transitioning = Arc::new(AtomicBool::new(false));
@@ -167,6 +174,33 @@ impl LibrespotBackend {
         let volume = (volume.clamp(0.0, 1.0) * f64::from(u16::MAX)).round() as u16;
         self.mixer.set_volume(volume);
         self.player.emit_volume_changed_event(volume);
+    }
+}
+
+struct MeteredSink {
+    inner: Box<dyn Sink>,
+    meter: PcmMeter,
+}
+
+impl Sink for MeteredSink {
+    fn start(&mut self) -> SinkResult<()> {
+        self.inner.start()
+    }
+
+    fn stop(&mut self) -> SinkResult<()> {
+        self.meter.clear();
+        self.inner.stop()
+    }
+
+    fn write(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
+        if let AudioPacket::Samples(samples) = &packet {
+            self.meter.analyze_f64(
+                samples,
+                librespot_playback::NUM_CHANNELS.into(),
+                librespot_playback::SAMPLE_RATE,
+            );
+        }
+        self.inner.write(packet, converter)
     }
 }
 

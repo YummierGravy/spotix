@@ -19,6 +19,7 @@ use crate::{
     audio::{
         decode::AudioDecoder,
         equalizer::{EqConfig, EqualizerSource},
+        meter::{MeteredSource, PcmMeter},
         output::{AudioSink, DefaultAudioSink},
         resample::ResamplingQuality,
         source::{
@@ -37,15 +38,17 @@ use super::{
 pub struct PlaybackManager {
     sink: DefaultAudioSink,
     event_send: Sender<PlayerEvent>,
+    meter: PcmMeter,
     current: Option<(MediaPath, Sender<Msg>)>,
     crossfade_send: Option<Sender<CrossfadeCommand>>,
 }
 
 impl PlaybackManager {
-    pub fn new(sink: DefaultAudioSink, event_send: Sender<PlayerEvent>) -> Self {
+    pub fn new(sink: DefaultAudioSink, event_send: Sender<PlayerEvent>, meter: PcmMeter) -> Self {
         Self {
             sink,
             event_send,
+            meter,
             current: None,
             crossfade_send: None,
         }
@@ -141,6 +144,7 @@ impl PlaybackManager {
         if eq.is_active() {
             source = Box::new(EqualizerSource::new(source, eq));
         }
+        source = Box::new(MeteredSource::new(source, self.meter.clone()));
 
         OutputSource {
             source,

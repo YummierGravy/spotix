@@ -1,6 +1,7 @@
 pub mod decode;
 pub mod decrypt;
 pub mod equalizer;
+pub mod meter;
 pub mod normalize;
 pub mod output;
 pub mod probe;

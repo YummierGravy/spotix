@@ -31,6 +31,7 @@ pub struct PlaybackSnapshot {
     pub progress: Duration,
     pub duration: Duration,
     pub volume: f64,
+    pub spectrum_bands: [f32; 16],
     pub shuffle: bool,
     pub queue_summary: String,
     pub status: String,
@@ -48,6 +49,7 @@ impl Default for PlaybackSnapshot {
             progress: Duration::ZERO,
             duration: Duration::ZERO,
             volume: 1.0,
+            spectrum_bands: [0.0; 16],
             shuffle: false,
             queue_summary: "Queue is empty".to_string(),
             status: "Playback service is idle".to_string(),
@@ -88,6 +90,7 @@ struct TrackMetadata {
 pub struct QtPlaybackService {
     sender: Sender<PlayerEvent>,
     snapshot: Arc<Mutex<PlaybackSnapshot>>,
+    meter: spotix_core::audio::meter::PcmMeter,
     metadata: Arc<Mutex<HashMap<ItemId, TrackMetadata>>>,
     _thread: JoinHandle<()>,
     _output: DefaultAudioOutput,
@@ -246,6 +249,7 @@ impl QtPlaybackService {
             &output,
             config.credentials_clone(),
         );
+        let meter = player.pcm_meter();
         let sender = player.sender();
         let snapshot = Arc::new(Mutex::new(PlaybackSnapshot {
             volume: config.volume,
@@ -269,6 +273,7 @@ impl QtPlaybackService {
         Ok(Self {
             sender,
             snapshot,
+            meter,
             metadata,
             _thread: thread,
             _output: output,
@@ -276,10 +281,16 @@ impl QtPlaybackService {
     }
 
     fn snapshot(&self) -> PlaybackSnapshot {
-        self.snapshot
+        let mut snapshot = self
+            .snapshot
             .lock()
-            .expect("qt playback snapshot lock poisoned")
-            .clone()
+            .expect("qt playback snapshot lock poisoned");
+        snapshot.spectrum_bands = if matches!(snapshot.state, PlaybackUiState::Playing) {
+            self.meter.levels()
+        } else {
+            [0.0; 16]
+        };
+        snapshot.clone()
     }
 
     fn update_snapshot(&self, f: impl FnOnce(&mut PlaybackSnapshot)) {

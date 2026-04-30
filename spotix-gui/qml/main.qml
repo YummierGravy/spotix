@@ -16,8 +16,8 @@ ApplicationWindow {
 
     readonly property SpotixApp spotix: SpotixApp {}
     property string activePane: "detail"
-    property var expandedTreeIds: ({ "route:home": true, "route:library": true })
-    property string selectedTreeId: "route:home"
+    property var expandedTreeIds: ({})
+    property string selectedTreeId: "route:saved-tracks"
     property int treeRevision: 0
     property int playingTick: 0
     property color terminalBg: "#181a20"
@@ -119,17 +119,6 @@ ApplicationWindow {
         view.positionViewAtIndex(view.currentIndex, ListView.Contain)
     }
 
-    function depthPrefix(depth, expandable, playable) {
-        var prefix = ""
-        for (var i = 0; i < depth; i++) {
-            prefix += "  "
-        }
-        if (playable) {
-            return prefix + "> "
-        }
-        return prefix + (expandable ? "+ " : "- ")
-    }
-
     function hasTreeChildren(itemId) {
         var items = root.parseArray(root.spotix.nav_tree_json)
         for (var i = 0; i < items.length; i++) {
@@ -181,14 +170,27 @@ ApplicationWindow {
     }
 
     function treePrefix(item) {
-        var prefix = ""
-        for (var i = 0; i < item.depth; i++) {
-            prefix += "  "
-        }
         if (root.hasTreeChildren(item.id)) {
-            return prefix + (root.isTreeExpanded(item.id) ? "- " : "+ ")
+            return root.isTreeExpanded(item.id) ? "- " : "+ "
         }
-        return prefix + "> "
+        return ""
+    }
+
+    function coverAscii(item) {
+        if (!item) {
+            return ""
+        }
+        if (item.art_ascii.length === 0) {
+            return "<pre style=\"margin:0;color:#6f7480\">::::::<br/>::..::<br/>::::::</pre>"
+        }
+        return item.art_ascii
+    }
+
+    function shouldShowCoverAscii(item) {
+        if (!item) {
+            return false
+        }
+        return item.kind === "track" || item.kind === "album" || item.kind === "playlist" || item.kind === "show"
     }
 
     function activateTreeItem(item) {
@@ -209,6 +211,32 @@ ApplicationWindow {
             root.selectedTreeId = item.id
             root.setTreeExpanded(item.id, false)
             return true
+        }
+        return false
+    }
+
+    function closeCurrentTreeBranch() {
+        var item = root.currentTreeItem()
+        if (!item) {
+            return false
+        }
+        if (root.hasTreeChildren(item.id) && root.isTreeExpanded(item.id)) {
+            root.selectedTreeId = item.id
+            root.setTreeExpanded(item.id, false)
+            return true
+        }
+        if (!item.parent_id) {
+            return false
+        }
+        var items = treeList.model
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].id === item.parent_id) {
+                treeList.currentIndex = i
+                root.selectedTreeId = items[i].id
+                root.setTreeExpanded(items[i].id, false)
+                treeList.positionViewAtIndex(i, ListView.Contain)
+                return true
+            }
         }
         return false
     }
@@ -299,6 +327,27 @@ ApplicationWindow {
         return output + "]"
     }
 
+    function eqBandLevel(index) {
+        var bands = root.parseArray(root.spotix.spectrum_bands_json)
+        if (index >= bands.length || root.spotix.playback_state !== "Playing") {
+            return 0
+        }
+        return Math.max(0, Math.min(1, Number(bands[index]) || 0))
+    }
+
+    function eqColumn(index) {
+        var visualLevel = Math.pow(Math.max(0, Math.min(1, root.eqBandLevel(index) * 1.45)), 0.72)
+        var filled = Math.round(visualLevel * 4)
+        var output = ""
+        for (var row = 3; row >= 0; row--) {
+            output += row < filled ? "#" : "."
+            if (row > 0) {
+                output += "\n"
+            }
+        }
+        return output
+    }
+
     function cargoStatusWord() {
         if (root.spotix.playback_state === "Playing") {
             return "Playing"
@@ -341,7 +390,7 @@ ApplicationWindow {
     }
 
     Timer {
-        interval: 500
+        interval: 200
         running: true
         repeat: true
         onTriggered: {
@@ -370,20 +419,20 @@ ApplicationWindow {
                 root.activePane = root.activePane === "tree" ? "detail" : "tree"
                 event.accepted = true
             } else if (event.key === Qt.Key_Right && root.activePane === "tree") {
-                if (!root.moveToFirstTreeChild()) {
-                    root.activateCurrent()
-                }
+                root.moveToFirstTreeChild()
                 event.accepted = true
             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                 root.activateCurrent()
                 event.accepted = true
             } else if (event.key === Qt.Key_Left || event.key === Qt.Key_Backspace) {
-                if (root.activePane === "tree" && root.collapseCurrentTreeItem()) {
+                if (root.activePane === "tree" && root.closeCurrentTreeBranch()) {
                     event.accepted = true
                 } else if (root.activePane === "tree" && event.key === Qt.Key_Left && root.moveToTreeParent()) {
                     event.accepted = true
-                } else {
+                } else if (root.activePane !== "tree") {
                     root.spotix.navigateBack()
+                    event.accepted = true
+                } else {
                     event.accepted = true
                 }
             } else if (event.key === Qt.Key_Space) {
@@ -426,8 +475,8 @@ ApplicationWindow {
                         Layout.fillHeight: true
                         Layout.topMargin: 5
                         Layout.bottomMargin: 5
-                        color: accountMouse.containsMouse ? controlHover : controlBg
-                        border.color: accountMouse.containsMouse ? accent : kdeBlue
+                        color: accountSettingsMouse.containsMouse ? controlHover : controlBg
+                        border.color: accountSettingsMouse.containsMouse ? accent : kdeBlue
                         border.width: 1
 
                         RowLayout {
@@ -467,16 +516,33 @@ ApplicationWindow {
                                     font.pixelSize: 10
                                 }
                             }
-                        }
 
-                        MouseArea {
-                            id: accountMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            onClicked: {
-                                root.spotix.navigateToRoute("login")
-                                root.activePane = "detail"
-                                root.refocusKeyboard()
+                            Rectangle {
+                                Layout.preferredWidth: 34
+                                Layout.preferredHeight: 24
+                                color: accountSettingsMouse.containsMouse ? panelAlt : "transparent"
+                                border.color: accountSettingsMouse.containsMouse ? accent : borderColor
+                                border.width: 1
+
+                                Label {
+                                    anchors.centerIn: parent
+                                    text: "[*]"
+                                    color: accountSettingsMouse.containsMouse ? accent : dimText
+                                    font.family: "monospace"
+                                    font.pixelSize: 11
+                                    font.bold: true
+                                }
+
+                                MouseArea {
+                                    id: accountSettingsMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    onClicked: {
+                                        root.spotix.navigateToRoute("login")
+                                        root.activePane = "detail"
+                                        root.refocusKeyboard()
+                                    }
+                                }
                             }
                         }
                     }
@@ -485,7 +551,7 @@ ApplicationWindow {
                         id: searchField
                         Layout.fillWidth: true
                         text: root.spotix.search_query
-                        placeholderText: "search tracks, artists, albums, playlists, podcasts"
+                        placeholderText: "press / to search"
                         color: textColor
                         placeholderTextColor: dimText
                         selectionColor: selection
@@ -551,11 +617,11 @@ ApplicationWindow {
                     ColumnLayout {
                         anchors.fill: parent
                         anchors.margins: 8
-                        spacing: 6
+                        spacing: root.spotix.active_route_art_ascii.length > 0 ? 1 : 6
 
                         Label {
                             Layout.fillWidth: true
-                            text: "TREE"
+                            text: "Library"
                             color: cyan
                             font.family: "monospace"
                             font.pixelSize: 13
@@ -564,6 +630,7 @@ ApplicationWindow {
 
                         ListView {
                             id: treeList
+                            property var appRoot: root
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
@@ -576,7 +643,7 @@ ApplicationWindow {
                             delegate: Rectangle {
                                 width: treeList.width
                                 height: rowHeight
-                                color: ListView.isCurrentItem && root.activePane === "tree" ? selection : "transparent"
+                                color: ListView.isCurrentItem && treeList.appRoot.activePane === "tree" ? selection : "transparent"
 
                                 RowLayout {
                                     anchors.fill: parent
@@ -585,8 +652,22 @@ ApplicationWindow {
                                     spacing: 8
 
                                     Label {
+                                        Layout.preferredWidth: 42
+                                        Layout.preferredHeight: parent.height
+                                        visible: !treeList.appRoot.hasTreeChildren(modelData.id) && treeList.appRoot.shouldShowCoverAscii(modelData)
+                                        text: treeList.appRoot.coverAscii(modelData)
+                                        textFormat: Text.RichText
+                                        color: kdeViolet
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                        font.family: "monospace"
+                                        font.pixelSize: 6
+                                        font.bold: true
+                                    }
+
+                                    Label {
                                         Layout.fillWidth: true
-                                        text: root.treePrefix(modelData) + modelData.label
+                                        text: treeList.appRoot.treePrefix(modelData) + modelData.label
                                         color: ListView.isCurrentItem ? accent : textColor
                                         elide: Text.ElideRight
                                         font.family: "monospace"
@@ -605,11 +686,11 @@ ApplicationWindow {
                                 MouseArea {
                                     anchors.fill: parent
                                     onClicked: {
-                                        root.activePane = "tree"
+                                        treeList.appRoot.activePane = "tree"
                                         treeList.currentIndex = index
-                                        root.selectedTreeId = modelData.id
-                                        root.activateTreeItem(modelData)
-                                        root.refocusKeyboard()
+                                        treeList.appRoot.selectedTreeId = modelData.id
+                                        treeList.appRoot.activateTreeItem(modelData)
+                                        treeList.appRoot.refocusKeyboard()
                                     }
                                 }
                             }
@@ -626,15 +707,17 @@ ApplicationWindow {
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 8
-                        spacing: 6
+                        anchors.margins: 6
+                        spacing: 3
 
                         RowLayout {
                             Layout.fillWidth: true
+                            Layout.preferredHeight: 82
                             spacing: 8
 
                             Label {
                                 Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignVCenter
                                 text: root.spotix.active_route_title
                                 color: accent
                                 font.family: "monospace"
@@ -644,15 +727,22 @@ ApplicationWindow {
                             }
 
                             Label {
-                                text: root.spotix.authenticated ? "ONLINE" : "LOGIN"
+                                Layout.preferredWidth: 165
+                                Layout.preferredHeight: 82
+                                clip: true
+                                text: root.spotix.active_route_art_ascii.length > 0 ? root.spotix.active_route_art_ascii : (root.spotix.authenticated ? "ONLINE" : "LOGIN")
+                                textFormat: root.spotix.active_route_art_ascii.length > 0 ? Text.RichText : Text.PlainText
                                 color: root.spotix.authenticated ? accent : warn
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
                                 font.family: "monospace"
-                                font.pixelSize: 13
+                                font.pixelSize: root.spotix.active_route_art_ascii.length > 0 ? 7 : 13
                             }
                         }
 
                         Label {
                             Layout.fillWidth: true
+                            Layout.maximumHeight: 32
                             text: root.spotix.detail_status
                             color: dimText
                             wrapMode: Text.WordWrap
@@ -739,6 +829,7 @@ ApplicationWindow {
 
                         ListView {
                             id: detailList
+                            property var appRoot: root
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
@@ -749,26 +840,17 @@ ApplicationWindow {
                             delegate: Rectangle {
                                 width: detailList.width
                                 height: rowHeight
-                                color: ListView.isCurrentItem && root.activePane === "detail" ? selection : "transparent"
+                                color: ListView.isCurrentItem && detailList.appRoot.activePane === "detail" ? selection : "transparent"
 
                                 RowLayout {
                                     anchors.fill: parent
                                     anchors.leftMargin: 6
                                     anchors.rightMargin: 6
-                                    spacing: 12
-
-                                    Label {
-                                        Layout.preferredWidth: 92
-                                        text: "[" + modelData.kind + "]"
-                                        color: root.isNowPlayingRow(modelData) ? accent : (modelData.playable ? accent : cyan)
-                                        elide: Text.ElideRight
-                                        font.family: "monospace"
-                                        font.pixelSize: 12
-                                    }
+                                    spacing: 3
 
                                     Label {
                                         Layout.preferredWidth: 18
-                                        text: root.isNowPlayingRow(modelData) ? root.playingGlyph() : ""
+                                        text: detailList.appRoot.isNowPlayingRow(modelData) ? detailList.appRoot.playingGlyph() : ""
                                         color: accent
                                         horizontalAlignment: Text.AlignHCenter
                                         font.family: "monospace"
@@ -777,9 +859,22 @@ ApplicationWindow {
                                     }
 
                                     Label {
+                                        Layout.preferredWidth: 36
+                                        Layout.preferredHeight: parent.height
+                                        visible: detailList.appRoot.shouldShowCoverAscii(modelData)
+                                        text: detailList.appRoot.coverAscii(modelData)
+                                        textFormat: Text.RichText
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                        font.family: "monospace"
+                                        font.pixelSize: 6
+                                        font.bold: true
+                                    }
+
+                                    Label {
                                         Layout.fillWidth: true
-                                        text: root.depthPrefix(modelData.depth, modelData.expandable, modelData.playable) + modelData.label
-                                        color: root.isNowPlayingRow(modelData) || ListView.isCurrentItem ? accent : textColor
+                                        text: modelData.label
+                                        color: detailList.appRoot.isNowPlayingRow(modelData) || ListView.isCurrentItem ? accent : textColor
                                         elide: Text.ElideRight
                                         font.family: "monospace"
                                         font.pixelSize: 14
@@ -798,12 +893,12 @@ ApplicationWindow {
                                 MouseArea {
                                     anchors.fill: parent
                                     onClicked: {
-                                        root.activePane = "detail"
+                                        detailList.appRoot.activePane = "detail"
                                         detailList.currentIndex = index
                                         if (modelData.playable || modelData.kind === "action" || modelData.kind === "album" || modelData.kind === "artist" || modelData.kind === "playlist" || modelData.kind === "show") {
-                                            root.spotix.activateDetailRow(modelData.id)
+                                            detailList.appRoot.spotix.activateDetailRow(modelData.id)
                                         }
-                                        root.refocusKeyboard()
+                                        detailList.appRoot.refocusKeyboard()
                                     }
                                 }
                             }
@@ -814,7 +909,7 @@ ApplicationWindow {
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 232
+                Layout.preferredHeight: 204
                 color: panelBg
                 border.color: kdeBlue
                 border.width: 1
@@ -833,26 +928,26 @@ ApplicationWindow {
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 10
-                    anchors.rightMargin: artBox.width + 20
-                    spacing: 7
+                    anchors.margins: 6
+                    anchors.rightMargin: artBox.width + 14
+                    spacing: 3
 
                     RowLayout {
                         Layout.fillWidth: true
-                        spacing: 12
+                        spacing: 6
 
                         Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 34
+                            Layout.preferredHeight: 30
                             color: panelAlt
                             border.color: borderColor
                             border.width: 1
 
                             RowLayout {
                                 anchors.fill: parent
-                                anchors.leftMargin: 10
-                                anchors.rightMargin: 10
-                                spacing: 10
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                spacing: 6
 
                                 Label {
                                     text: "Now Playing"
@@ -898,7 +993,7 @@ ApplicationWindow {
 
                                 Rectangle {
                                     Layout.preferredWidth: 48
-                                    Layout.preferredHeight: 24
+                                    Layout.preferredHeight: 22
                                     color: savedMouse.containsMouse ? controlHover : controlBg
                                     border.color: root.spotix.now_playing_saved ? accent : dimText
                                     border.width: 1
@@ -937,7 +1032,7 @@ ApplicationWindow {
 
                             delegate: Rectangle {
                                 Layout.preferredWidth: 82
-                                Layout.preferredHeight: 34
+                                Layout.preferredHeight: 30
                                 color: controlMouse.containsMouse ? controlHover : controlBg
                                 border.color: controlMouse.containsMouse ? accent : kdeBlue
                                 border.width: 1
@@ -974,7 +1069,7 @@ ApplicationWindow {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        spacing: 6
 
                         Label {
                             text: root.cargoStatusWord()
@@ -1004,7 +1099,7 @@ ApplicationWindow {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        spacing: 6
 
                         Label {
                             text: root.formatTime(root.spotix.playback_progress_ms) + " / " + root.formatTime(root.spotix.playback_duration_ms)
@@ -1038,25 +1133,44 @@ ApplicationWindow {
                         }
 
                         Label {
-                            Layout.preferredWidth: 42
+                            Layout.preferredWidth: 28
                             text: root.volumePercent() + "%"
                             color: cyan
-                            horizontalAlignment: Text.AlignRight
+                            horizontalAlignment: Text.AlignLeft
                             font.family: "monospace"
                             font.pixelSize: 12
                             font.bold: true
                         }
-                    }
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 1
-                        color: borderColor
+                        Item {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 24
+
+                            Row {
+                                anchors.centerIn: parent
+                                spacing: 3
+
+                                Repeater {
+                                    model: 16
+
+                                    delegate: Label {
+                                        width: 7
+                                        text: root.eqColumn(index)
+                                        color: kdeViolet
+                                        horizontalAlignment: Text.AlignHCenter
+                                        lineHeight: 0.82
+                                        font.family: "monospace"
+                                        font.pixelSize: 7
+                                        font.bold: true
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     RowLayout {
                         Layout.fillWidth: true
-                        spacing: 12
+                        spacing: 8
 
                         Label {
                             Layout.fillWidth: true
@@ -1081,9 +1195,9 @@ ApplicationWindow {
                     id: artBox
                     anchors.top: parent.top
                     anchors.right: parent.right
-                    anchors.margins: 10
+                    anchors.margins: 6
                     width: 250
-                    height: parent.height - 20
+                    height: parent.height - 12
                     color: panelAlt
                     border.color: borderColor
                     border.width: 1
@@ -1091,7 +1205,7 @@ ApplicationWindow {
                     Label {
                         id: artText
                         anchors.fill: parent
-                        anchors.margins: 8
+                        anchors.margins: 6
                         text: root.spotix.now_playing_art_ascii
                         textFormat: Text.RichText
                         color: accent

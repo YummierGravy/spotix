@@ -66,6 +66,8 @@ pub struct QtTreeItem {
     pub kind: String,
     pub label: String,
     pub meta: String,
+    pub image_url: String,
+    pub art_ascii: String,
     pub depth: i32,
     pub expanded: bool,
     pub selectable: bool,
@@ -78,6 +80,8 @@ pub struct QtDetailRow {
     pub kind: String,
     pub label: String,
     pub meta: String,
+    pub image_url: String,
+    pub art_ascii: String,
     pub depth: i32,
     pub playable: bool,
     pub expandable: bool,
@@ -87,6 +91,7 @@ pub struct QtDetailRow {
 pub struct QtNavDocument {
     pub title: String,
     pub status: String,
+    pub route_art_ascii: String,
     pub rows: Vec<QtDetailRow>,
 }
 
@@ -229,6 +234,8 @@ impl QtDetailRow {
             kind: kind.into(),
             label: label.into(),
             meta: meta.into(),
+            image_url: String::new(),
+            art_ascii: String::new(),
             depth,
             playable: false,
             expandable: true,
@@ -241,6 +248,13 @@ impl QtDetailRow {
             kind: "track".to_string(),
             label: track.name.to_string(),
             meta: format!("{} | {}", track.artist_names(), track.album_name()),
+            image_url: track
+                .album
+                .as_ref()
+                .and_then(|album| album.images.front())
+                .map(|image| image.url.to_string())
+                .unwrap_or_default(),
+            art_ascii: String::new(),
             depth,
             playable: !matches!(track.is_playable, Some(false)),
             expandable: false,
@@ -297,6 +311,8 @@ impl QtDetailRow {
             kind: "episode".to_string(),
             label: episode.name.to_string(),
             meta: episode.release(),
+            image_url: String::new(),
+            art_ascii: String::new(),
             depth,
             playable: false,
             expandable: false,

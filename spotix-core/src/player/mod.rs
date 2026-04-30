@@ -12,6 +12,7 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use crate::{
     audio::{
         equalizer::EqConfig,
+        meter::PcmMeter,
         output::{AudioOutput, AudioSink, DefaultAudioOutput, DefaultAudioSink},
     },
     cache::CacheHandle,
@@ -77,6 +78,7 @@ pub struct Player {
     receiver: Receiver<PlayerEvent>,
     audio_output_sink: DefaultAudioSink,
     playback_mgr: PlaybackManager,
+    pcm_meter: PcmMeter,
     consecutive_loading_failures: usize,
     ignore_end_of_track: bool,
     librespot: Option<LibrespotBackend>,
@@ -94,6 +96,7 @@ impl Player {
         let (sender, receiver) = unbounded();
         let cache_dir = Some(cache.base_dir().to_path_buf());
         let audio_cache_limit = config.audio_cache_limit;
+        let pcm_meter = PcmMeter::default();
         let librespot = match config.engine {
             PlaybackEngine::Librespot => match session.credentials() {
                 Some(creds) => LibrespotBackend::new(
@@ -102,6 +105,7 @@ impl Player {
                     sender.clone(),
                     cache_dir.clone(),
                     audio_cache_limit,
+                    pcm_meter.clone(),
                 )
                 .map_err(|err| {
                     log::error!("librespot backend init failed: {err}");
@@ -117,6 +121,7 @@ impl Player {
                             sender.clone(),
                             cache_dir.clone(),
                             audio_cache_limit,
+                            pcm_meter.clone(),
                         )
                         .map_err(|err| {
                             log::error!("librespot backend init failed: {err}");
@@ -132,7 +137,11 @@ impl Player {
             PlaybackEngine::Native => None,
         };
         Self {
-            playback_mgr: PlaybackManager::new(audio_output.sink(), sender.clone()),
+            playback_mgr: PlaybackManager::new(
+                audio_output.sink(),
+                sender.clone(),
+                pcm_meter.clone(),
+            ),
             session,
             cdn,
             cache,
@@ -140,6 +149,7 @@ impl Player {
             sender,
             receiver,
             audio_output_sink: audio_output.sink(),
+            pcm_meter,
             state: PlayerState::Stopped,
             preload: PreloadState::None,
             queue: Queue::new(),
@@ -155,6 +165,10 @@ impl Player {
 
     pub fn receiver(&self) -> Receiver<PlayerEvent> {
         self.receiver.clone()
+    }
+
+    pub fn pcm_meter(&self) -> PcmMeter {
+        self.pcm_meter.clone()
     }
 
     pub fn handle(&mut self, event: PlayerEvent) {

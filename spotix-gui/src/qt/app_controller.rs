@@ -1,4 +1,5 @@
 use std::{
+    collections::{HashMap, HashSet},
     fs,
     io::Read,
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -58,6 +59,9 @@ static LIBRARY_RESULT: OnceLock<Mutex<Option<Result<LibraryJson, String>>>> = On
 static SEARCH_RESULT: OnceLock<Mutex<Option<Result<QtSearchResults, String>>>> = OnceLock::new();
 static NAV_RESULT: OnceLock<Mutex<Option<Result<QtNavPayload, String>>>> = OnceLock::new();
 static ART_RESULT: OnceLock<Mutex<Option<(String, Result<String, String>)>>> = OnceLock::new();
+static TREE_ART_RESULT: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
+static TREE_ART_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+static TREE_ART_IN_FLIGHT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static SAVED_TRACK_RESULT: OnceLock<Mutex<SavedTrackResultSlot>> = OnceLock::new();
 static NAV_STATE: OnceLock<Mutex<QtNavState>> = OnceLock::new();
 static PLAYBACK_CONFIGURED: OnceLock<Mutex<bool>> = OnceLock::new();
@@ -106,10 +110,23 @@ enum QtNavTarget {
     Shows,
     Search,
     Lyrics,
-    Playlist { id: String, name: String },
-    Album { id: String, name: String },
-    Artist { id: String, name: String },
-    Show { id: String, name: String },
+    Playlist {
+        id: String,
+        name: String,
+        image_url: String,
+    },
+    Album {
+        id: String,
+        name: String,
+    },
+    Artist {
+        id: String,
+        name: String,
+    },
+    Show {
+        id: String,
+        name: String,
+    },
 }
 
 impl QtNavTarget {
@@ -135,6 +152,7 @@ impl QtNavTarget {
                     "playlist" => Some(Self::Playlist {
                         id: spotify_id.to_string(),
                         name,
+                        image_url: String::new(),
                     }),
                     "album" => Some(Self::Album {
                         id: spotify_id.to_string(),
@@ -251,6 +269,7 @@ pub mod qobject {
         #[qproperty(QString, saved_shows_json)]
         #[qproperty(QString, nav_tree_json)]
         #[qproperty(QString, active_route_title)]
+        #[qproperty(QString, active_route_art_ascii)]
         #[qproperty(QString, detail_rows_json)]
         #[qproperty(QString, detail_status)]
         #[qproperty(QString, playback_state)]
@@ -264,6 +283,7 @@ pub mod qobject {
         #[qproperty(i32, playback_progress_ms)]
         #[qproperty(i32, playback_duration_ms)]
         #[qproperty(f64, volume)]
+        #[qproperty(QString, spectrum_bands_json)]
         #[qproperty(bool, shuffle_enabled)]
         #[qproperty(QString, saved_track_id)]
         #[qproperty(bool, now_playing_saved)]
@@ -400,6 +420,7 @@ pub struct SpotixAppRust {
     saved_shows_json: QString,
     nav_tree_json: QString,
     active_route_title: QString,
+    active_route_art_ascii: QString,
     detail_rows_json: QString,
     detail_status: QString,
     playback_state: QString,
@@ -413,6 +434,7 @@ pub struct SpotixAppRust {
     playback_progress_ms: i32,
     playback_duration_ms: i32,
     volume: f64,
+    spectrum_bands_json: QString,
     shuffle_enabled: bool,
     saved_track_id: QString,
     now_playing_saved: bool,
@@ -431,6 +453,7 @@ impl Default for SpotixAppRust {
         let initial_detail = QtNavDocument {
             title: nav_state.current.title(),
             status: "Use the tree or keyboard shortcuts to navigate Spotix.".to_string(),
+            route_art_ascii: String::new(),
             rows: home_rows(&startup.status),
         };
         Self {
@@ -465,6 +488,7 @@ impl Default for SpotixAppRust {
                 &[],
             ))),
             active_route_title: QString::from(&initial_detail.title),
+            active_route_art_ascii: QString::from(&initial_detail.route_art_ascii),
             detail_rows_json: QString::from(&json_or_empty_array(&initial_detail.rows)),
             detail_status: QString::from(&initial_detail.status),
             playback_state: QString::from(playback.state.as_str()),
@@ -478,6 +502,7 @@ impl Default for SpotixAppRust {
             playback_progress_ms: duration_ms(playback.progress),
             playback_duration_ms: duration_ms(playback.duration),
             volume: playback.volume,
+            spectrum_bands_json: QString::from(json_or_empty_array(&playback.spectrum_bands)),
             shuffle_enabled: playback.shuffle,
             saved_track_id: QString::from(""),
             now_playing_saved: false,
@@ -602,6 +627,7 @@ impl qobject::SpotixApp {
                         WebApi::global()
                             .set_webapi_client_id(runtime.config.effective_webapi_client_id());
                         WebApi::global().clear_rate_limit_state();
+                        authenticated = true;
 
                         if let Some(credentials) = payload.credentials {
                             runtime.config.store_credentials(credentials.clone());
@@ -611,7 +637,6 @@ impl qobject::SpotixApp {
                             });
                             playback_service::init(runtime.session.clone(), &runtime.config);
                             set_playback_configured(true);
-                            authenticated = true;
                             status = "Connected to Spotify".to_string();
                         }
                         runtime.config.save();
@@ -623,6 +648,9 @@ impl qobject::SpotixApp {
                     self.as_mut().set_login_error(QString::from(""));
                     if authenticated {
                         self.as_mut().navigate_to(QtNavTarget::Home, false);
+                        self.as_mut()
+                            .set_library_status(QString::from("Loading Spotify library..."));
+                        self.as_mut().load_library();
                     }
                 }
                 Err(err) => {
@@ -804,6 +832,7 @@ impl qobject::SpotixApp {
     }
 
     pub fn refresh_playback(mut self: Pin<&mut Self>) {
+        self.as_mut().poll_tree_art_result();
         let playback = playback_service::snapshot();
         self.as_mut()
             .set_playback_state(QString::from(playback.state.as_str()));
@@ -827,9 +856,41 @@ impl qobject::SpotixApp {
         self.as_mut()
             .set_playback_duration_ms(duration_ms(playback.duration));
         self.as_mut().set_volume(playback.volume);
+        self.as_mut()
+            .set_spectrum_bands_json(QString::from(json_or_empty_array(&playback.spectrum_bands)));
         self.as_mut().set_shuffle_enabled(playback.shuffle);
         self.as_mut().sync_now_playing_saved(&playback.track_id);
         self.as_mut().poll_saved_track_result();
+    }
+
+    fn poll_tree_art_result(mut self: Pin<&mut Self>) {
+        let results = {
+            let mut slot = TREE_ART_RESULT
+                .get_or_init(|| Mutex::new(Vec::new()))
+                .lock()
+                .expect("qt tree art result lock poisoned");
+            if slot.is_empty() {
+                return;
+            }
+            slot.drain(..).collect::<Vec<_>>()
+        };
+
+        {
+            let mut cache = TREE_ART_CACHE
+                .get_or_init(|| Mutex::new(HashMap::new()))
+                .lock()
+                .expect("qt tree art cache lock poisoned");
+            for (url, art) in results {
+                cache.insert(url, art);
+            }
+        }
+        let mut rows = parse_json_array::<QtDetailRow>(&self.detail_rows_json().to_string());
+        if !rows.is_empty() {
+            enrich_detail_art(&mut rows);
+            self.as_mut()
+                .set_detail_rows_json(QString::from(&json_or_empty_array(&rows)));
+        }
+        self.as_mut().sync_nav_tree();
     }
 
     fn refresh_ascii_art(mut self: Pin<&mut Self>, image_url: &str, previous_image_url: &str) {
@@ -1028,6 +1089,20 @@ impl qobject::SpotixApp {
             self.as_mut().activate_detail_row(&QString::from(&item_id));
             return;
         }
+        if let Some((spotify_id, item)) = item_id.strip_prefix("playlist:").and_then(|spotify_id| {
+            tree_item_by_id(&self.nav_tree_json().to_string(), &item_id)
+                .map(|item| (spotify_id, item))
+        }) {
+            self.as_mut().navigate_to(
+                QtNavTarget::Playlist {
+                    id: spotify_id.to_string(),
+                    name: item.label,
+                    image_url: item.image_url,
+                },
+                true,
+            );
+            return;
+        }
         if let Some(target) = QtNavTarget::from_item_id(&item_id) {
             self.as_mut().navigate_to(target, true);
         }
@@ -1115,6 +1190,7 @@ impl qobject::SpotixApp {
             QtNavTarget::Playlist {
                 id: id.to_string(),
                 name: name.to_string(),
+                image_url: String::new(),
             },
             true,
         );
@@ -1223,9 +1299,12 @@ impl qobject::SpotixApp {
         }
     }
 
-    fn apply_nav_document(mut self: Pin<&mut Self>, document: QtNavDocument) {
+    fn apply_nav_document(mut self: Pin<&mut Self>, mut document: QtNavDocument) {
+        enrich_detail_art(&mut document.rows);
         self.as_mut()
             .set_active_route_title(QString::from(&document.title));
+        self.as_mut()
+            .set_active_route_art_ascii(QString::from(&document.route_art_ascii));
         self.as_mut()
             .set_detail_status(QString::from(&document.status));
         self.as_mut()
@@ -1284,139 +1363,86 @@ fn set_nav_state(state: QtNavState) {
 }
 
 fn nav_tree(
-    state: &QtNavState,
+    _state: &QtNavState,
     playlists: &[QtPlaylist],
     albums: &[QtAlbum],
     shows: &[QtShow],
 ) -> Vec<QtTreeItem> {
     let mut items = Vec::new();
-    push_tree_route(&mut items, "route:home", "", "home", "Music", "root", 0);
-    push_tree_route(
-        &mut items,
-        "route:library",
-        "route:home",
-        "library",
-        "Library",
-        "saved",
-        1,
-    );
     push_tree_route(
         &mut items,
         "route:saved-tracks",
-        "route:library",
+        "",
         "tracks",
         "Saved Tracks",
         "",
-        2,
+        0,
     );
     push_tree_route(
         &mut items,
         "route:playlists",
-        "route:library",
+        "",
         "playlists",
         "Playlists",
         &format!("{} loaded", playlists.len()),
-        2,
+        0,
     );
     for playlist in playlists.iter().take(40) {
-        push_tree_route(
+        push_tree_route_with_image(
             &mut items,
             &format!("playlist:{}", playlist.id),
             "route:playlists",
             "playlist",
             &playlist.title,
             &playlist.owner,
-            3,
+            &playlist.image_url,
+            1,
         );
     }
     push_tree_route(
         &mut items,
         "route:saved-albums",
-        "route:library",
+        "",
         "albums",
         "Albums",
         &format!("{} loaded", albums.len()),
-        2,
+        0,
     );
     for album in albums.iter().take(40) {
-        push_tree_route(
+        push_tree_route_with_image(
             &mut items,
             &format!("album:{}", album.id),
             "route:saved-albums",
             "album",
             &album.title,
             &album.artist,
-            3,
+            &album.image_url,
+            1,
         );
     }
     push_tree_route(
         &mut items,
-        "route:artists",
-        "route:library",
-        "artists",
-        "Artists",
-        "from search/detail",
-        2,
-    );
-    push_tree_route(
-        &mut items,
         "route:shows",
-        "route:library",
+        "",
         "shows",
         "Podcasts",
         &format!("{} loaded", shows.len()),
-        2,
+        0,
     );
     for show in shows.iter().take(40) {
-        push_tree_route(
+        push_tree_route_with_image(
             &mut items,
             &format!("show:{}", show.id),
             "route:shows",
             "show",
             &show.title,
             &show.publisher,
-            3,
+            &show.image_url,
+            1,
         );
     }
-    push_tree_route(
-        &mut items,
-        "route:search",
-        "route:home",
-        "search",
-        "Search",
-        "press /",
-        1,
-    );
-    push_tree_route(
-        &mut items,
-        "route:lyrics",
-        "route:home",
-        "lyrics",
-        "Lyrics",
-        "parity",
-        1,
-    );
-    push_tree_route(
-        &mut items,
-        "route:settings",
-        "",
-        "settings",
-        "Settings",
-        "account",
-        0,
-    );
-    push_tree_route(
-        &mut items,
-        "route:login",
-        "route:settings",
-        "account",
-        "Account",
-        "",
-        1,
-    );
-
     for item in &mut items {
-        item.expanded = item.depth < 2 || item.id == format!("route:{}", state.current.route());
+        item.expanded = true;
     }
     items
 }
@@ -1430,12 +1456,27 @@ fn push_tree_route(
     meta: &str,
     depth: i32,
 ) {
+    push_tree_route_with_image(items, id, parent_id, kind, label, meta, "", depth);
+}
+
+fn push_tree_route_with_image(
+    items: &mut Vec<QtTreeItem>,
+    id: &str,
+    parent_id: &str,
+    kind: &str,
+    label: &str,
+    meta: &str,
+    image_url: &str,
+    depth: i32,
+) {
     items.push(QtTreeItem {
         id: id.to_string(),
         parent_id: parent_id.to_string(),
         kind: kind.to_string(),
         label: label.to_string(),
         meta: meta.to_string(),
+        image_url: image_url.to_string(),
+        art_ascii: tiny_tree_art_for_url(image_url),
         depth,
         expanded: true,
         selectable: true,
@@ -1463,71 +1504,18 @@ fn immediate_nav_document(target: &QtNavTarget, app: &qobject::SpotixApp) -> Opt
     };
 
     let rows = match target {
-        QtNavTarget::Home => home_rows(&status),
         QtNavTarget::Login => account_rows(&app.login_error().to_string()),
-        QtNavTarget::Library => library_rows(app),
         QtNavTarget::SavedTracks => {
             qt_track_rows(&parse_json_array(&app.saved_tracks_json().to_string()), 0)
         }
-        QtNavTarget::Playlists => parse_json_array::<QtPlaylist>(&app.playlists_json().to_string())
-            .iter()
-            .map(|playlist| {
-                QtDetailRow::route(
-                    format!("playlist:{}", playlist.id),
-                    "playlist",
-                    &playlist.title,
-                    &playlist.owner,
-                    0,
-                )
-            })
-            .collect(),
-        QtNavTarget::SavedAlbums => {
-            parse_json_array::<QtAlbum>(&app.saved_albums_json().to_string())
-                .iter()
-                .map(|album| {
-                    QtDetailRow::route(
-                        format!("album:{}", album.id),
-                        "album",
-                        &album.title,
-                        &album.artist,
-                        0,
-                    )
-                })
-                .collect()
-        }
-        QtNavTarget::Artists => vec![QtDetailRow::route(
-            "route:search",
-            "search",
-            "Search for artists",
-            "artist detail routes are loaded from search results",
-            0,
-        )],
-        QtNavTarget::Shows => parse_json_array::<QtShow>(&app.saved_shows_json().to_string())
-            .iter()
-            .map(|show| {
-                QtDetailRow::route(
-                    format!("show:{}", show.id),
-                    "show",
-                    &show.title,
-                    &show.publisher,
-                    0,
-                )
-            })
-            .collect(),
         QtNavTarget::Search => search_rows(&app.search_results_json().to_string()),
-        QtNavTarget::Lyrics => vec![QtDetailRow::route(
-            "route:lyrics",
-            "lyrics",
-            "Lyrics",
-            "not yet implemented in the Qt port",
-            0,
-        )],
         _ => Vec::new(),
     };
 
     Some(QtNavDocument {
         title,
         status,
+        route_art_ascii: String::new(),
         rows,
     })
 }
@@ -1536,106 +1524,91 @@ fn load_nav_document(target: QtNavTarget) -> Result<QtNavPayload, String> {
     let api = WebApi::global();
     let mut tracks_for_playback = Vec::new();
     let document = match &target {
-        QtNavTarget::Playlist { id, name } => {
-            let playlist = api.get_playlist(id).map_err(|err| err.to_string())?;
-            let tracks = api
-                .get_playlist_tracks_all(id)
-                .map_err(|err| err.to_string())?;
+        QtNavTarget::Playlist {
+            id,
+            name,
+            image_url,
+        } => {
+            let tracks = match api.get_playlist_tracks_all(id) {
+                Ok(tracks) => tracks,
+                Err(err) if is_forbidden_playlist_error(&err.to_string()) => {
+                    return Ok(QtNavPayload {
+                        target: target.clone(),
+                        document: QtNavDocument {
+                            title: name.clone(),
+                            status: format!(
+                                "Playlist | {name} | Spotify denied access to this playlist"
+                            ),
+                            route_art_ascii: medium_album_art_to_ascii(image_url)
+                                .unwrap_or_default(),
+                            rows: Vec::new(),
+                        },
+                        tracks_for_playback,
+                    });
+                }
+                Err(err) => return Err(err.to_string()),
+            };
             tracks_for_playback.extend(tracks.iter().cloned());
-            let mut rows = vec![QtDetailRow::playlist(&playlist, 0)];
-            rows.push(QtDetailRow::route(
-                format!("playlist:{id}"),
-                "section",
-                "Tracks",
-                format!("{} track(s)", tracks.len()),
-                1,
-            ));
-            rows.extend(tracks.iter().map(|track| QtDetailRow::track(track, 2)));
+            let rows = tracks
+                .iter()
+                .map(|track| QtDetailRow::track(track, 0))
+                .collect();
             QtNavDocument {
-                title: playlist.name.to_string(),
+                title: name.clone(),
                 status: format!("Playlist | {name} | {} track(s)", tracks.len()),
+                route_art_ascii: medium_album_art_to_ascii(image_url).unwrap_or_default(),
                 rows,
             }
         }
         QtNavTarget::Album { id, name } => {
             let album = api.get_album(id).map_err(|err| err.to_string())?.data;
+            let image_url = album
+                .images
+                .front()
+                .map(|image| image.url.to_string())
+                .unwrap_or_default();
             let tracks = album.clone().into_tracks_with_context();
             tracks_for_playback.extend(tracks.iter().cloned());
-            let mut rows = vec![QtDetailRow::album(&album, 0)];
-            rows.push(QtDetailRow::route(
-                format!("album:{id}"),
-                "section",
-                "Tracks",
-                format!("{} track(s)", tracks.len()),
-                1,
-            ));
-            rows.extend(tracks.iter().map(|track| QtDetailRow::track(track, 2)));
+            let rows = tracks
+                .iter()
+                .map(|track| QtDetailRow::track(track, 0))
+                .collect();
             QtNavDocument {
                 title: album.name.to_string(),
                 status: format!("Album | {name} | {}", album.release()),
+                route_art_ascii: medium_album_art_to_ascii(&image_url).unwrap_or_default(),
                 rows,
             }
         }
         QtNavTarget::Artist { id, name } => {
-            let artist = api.get_artist(id).map_err(|err| err.to_string())?;
             let top_tracks = api
                 .get_artist_top_tracks(id)
                 .map_err(|err| err.to_string())?;
-            let albums = api.get_artist_albums(id).map_err(|err| err.to_string())?;
             tracks_for_playback.extend(top_tracks.iter().cloned());
-            let mut rows = vec![QtDetailRow::artist(&artist, 0)];
-            rows.push(QtDetailRow::route(
-                format!("artist:{id}:top-tracks"),
-                "section",
-                "Top Tracks",
-                format!("{} track(s)", top_tracks.len()),
-                1,
-            ));
-            rows.extend(top_tracks.iter().map(|track| QtDetailRow::track(track, 2)));
-            rows.push(QtDetailRow::route(
-                format!("artist:{id}:albums"),
-                "section",
-                "Albums",
-                format!("{} album(s)", albums.albums.len()),
-                1,
-            ));
-            rows.extend(
-                albums
-                    .albums
-                    .iter()
-                    .map(|album| QtDetailRow::album(album, 2)),
-            );
+            let rows = top_tracks
+                .iter()
+                .map(|track| QtDetailRow::track(track, 0))
+                .collect();
             QtNavDocument {
-                title: artist.name.to_string(),
+                title: name.clone(),
                 status: format!("Artist | {name}"),
+                route_art_ascii: String::new(),
                 rows,
             }
         }
         QtNavTarget::Show { id, name } => {
             let show = api.get_show(id).map_err(|err| err.to_string())?.data;
-            let episodes = api.get_show_episodes(id).map_err(|err| err.to_string())?;
-            let mut rows = vec![QtDetailRow::show(&show, 0)];
-            rows.push(QtDetailRow::route(
-                format!("show:{id}:episodes"),
-                "section",
-                "Episodes",
-                format!("{} episode(s)", episodes.len()),
-                1,
-            ));
-            rows.extend(
-                episodes
-                    .iter()
-                    .map(|episode| QtDetailRow::episode(episode, 2)),
-            );
             QtNavDocument {
                 title: show.name.to_string(),
                 status: format!("Podcast | {name}"),
-                rows,
+                route_art_ascii: String::new(),
+                rows: Vec::new(),
             }
         }
         _ => QtNavDocument {
             title: target.title(),
             status: "Route loaded".to_string(),
+            route_art_ascii: String::new(),
             rows: Vec::new(),
         },
     };
@@ -1647,7 +1620,7 @@ fn load_nav_document(target: QtNavTarget) -> Result<QtNavPayload, String> {
     })
 }
 
-fn home_rows(status: &str) -> Vec<QtDetailRow> {
+fn home_rows(_status: &str) -> Vec<QtDetailRow> {
     vec![
         QtDetailRow::route(
             "route:library",
@@ -1658,7 +1631,6 @@ fn home_rows(status: &str) -> Vec<QtDetailRow> {
         ),
         QtDetailRow::route("route:search", "search", "Search", "press / to focus", 0),
         QtDetailRow::route("route:lyrics", "lyrics", "Lyrics", "parity placeholder", 0),
-        QtDetailRow::route("route:login", "account", "Account", status, 0),
     ]
 }
 
@@ -1727,6 +1699,8 @@ fn account_action_row(id: &str, label: &str, meta: &str) -> QtDetailRow {
         kind: "action".to_string(),
         label: label.to_string(),
         meta: meta.to_string(),
+        image_url: String::new(),
+        art_ascii: String::new(),
         depth: 1,
         playable: false,
         expandable: false,
@@ -1831,51 +1805,6 @@ fn cache_bucket_label(name: &str) -> String {
     }
 }
 
-fn library_rows(app: &qobject::SpotixApp) -> Vec<QtDetailRow> {
-    vec![
-        QtDetailRow::route(
-            "route:saved-tracks",
-            "tracks",
-            "Saved Tracks",
-            format!(
-                "{} loaded",
-                parse_json_array::<QtTrack>(&app.saved_tracks_json().to_string()).len()
-            ),
-            0,
-        ),
-        QtDetailRow::route(
-            "route:playlists",
-            "playlists",
-            "Playlists",
-            format!(
-                "{} loaded",
-                parse_json_array::<QtPlaylist>(&app.playlists_json().to_string()).len()
-            ),
-            0,
-        ),
-        QtDetailRow::route(
-            "route:saved-albums",
-            "albums",
-            "Albums",
-            format!(
-                "{} loaded",
-                parse_json_array::<QtAlbum>(&app.saved_albums_json().to_string()).len()
-            ),
-            0,
-        ),
-        QtDetailRow::route(
-            "route:shows",
-            "shows",
-            "Podcasts",
-            format!(
-                "{} loaded",
-                parse_json_array::<QtShow>(&app.saved_shows_json().to_string()).len()
-            ),
-            0,
-        ),
-    ]
-}
-
 fn search_rows(json: &str) -> Vec<QtDetailRow> {
     let results = serde_json::from_str::<QtSearchResults>(json).unwrap_or_default();
     let mut rows = Vec::new();
@@ -1962,11 +1891,32 @@ fn qt_track_rows(tracks: &[QtTrack], depth: i32) -> Vec<QtDetailRow> {
             kind: "track".to_string(),
             label: track.title.clone(),
             meta: format!("{} | {}", track.artist, track.album),
+            image_url: track.image_url.clone(),
+            art_ascii: tiny_tree_art_for_url(&track.image_url),
             depth,
             playable: true,
             expandable: false,
         })
         .collect()
+}
+
+fn enrich_detail_art(rows: &mut [QtDetailRow]) {
+    for row in rows {
+        if row.art_ascii.is_empty() && !row.image_url.is_empty() {
+            row.art_ascii = tiny_tree_art_for_url(&row.image_url);
+        }
+    }
+}
+
+fn is_forbidden_playlist_error(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("403") || error.contains("forbidden")
+}
+
+fn tree_item_by_id(json: &str, item_id: &str) -> Option<QtTreeItem> {
+    parse_json_array::<QtTreeItem>(json)
+        .into_iter()
+        .find(|item| item.id == item_id)
 }
 
 fn loading_rows(title: &str) -> Vec<QtDetailRow> {
@@ -2057,6 +2007,95 @@ fn album_art_to_ascii(url: &str) -> Result<String, String> {
         .characters("MWNXK0Okxdolc:;,'...   ".to_string())
         .build();
     Ok(extract_artem_pre(&artem::convert(image, &config)))
+}
+
+fn tiny_tree_art_for_url(url: &str) -> String {
+    if url.is_empty() {
+        return String::new();
+    }
+    if let Some(art) = TREE_ART_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("qt tree art cache lock poisoned")
+        .get(url)
+        .cloned()
+    {
+        return art;
+    }
+
+    let should_spawn = TREE_ART_IN_FLIGHT
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .expect("qt tree art in-flight lock poisoned")
+        .insert(url.to_string());
+    if should_spawn {
+        let url = url.to_string();
+        thread::spawn(move || {
+            let art = tiny_album_art_to_ascii(&url).unwrap_or_default();
+            TREE_ART_IN_FLIGHT
+                .get_or_init(|| Mutex::new(HashSet::new()))
+                .lock()
+                .expect("qt tree art in-flight lock poisoned")
+                .remove(&url);
+            TREE_ART_RESULT
+                .get_or_init(|| Mutex::new(Vec::new()))
+                .lock()
+                .expect("qt tree art result lock poisoned")
+                .push((url, art));
+        });
+    }
+    String::new()
+}
+
+fn tiny_album_art_to_ascii(url: &str) -> Result<String, String> {
+    colored_album_art_to_ascii(url, 6, 3)
+}
+
+fn medium_album_art_to_ascii(url: &str) -> Result<String, String> {
+    if url.is_empty() {
+        return Ok(String::new());
+    }
+    colored_album_art_to_ascii(url, 25, 11)
+}
+
+fn colored_album_art_to_ascii(url: &str, width: u32, height: u32) -> Result<String, String> {
+    let response = ureq::get(url).call().map_err(|err| err.to_string())?;
+    let mut reader = response.into_body().into_reader();
+    let mut body = Vec::new();
+    reader
+        .read_to_end(&mut body)
+        .map_err(|err| err.to_string())?;
+
+    let image = image::load_from_memory(&body).map_err(|err| err.to_string())?;
+    let thumbnail = image
+        .resize_exact(width, height, image::imageops::FilterType::Triangle)
+        .to_rgb8();
+    let chars = [' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
+    let mut output = String::from("<pre style=\"margin:0\">");
+    for y in 0..thumbnail.height() {
+        if y > 0 {
+            output.push_str("<br/>");
+        }
+        for x in 0..thumbnail.width() {
+            let pixel = thumbnail.get_pixel(x, y);
+            let [red, green, blue] = pixel.0;
+            let luminance =
+                ((u32::from(red) * 299 + u32::from(green) * 587 + u32::from(blue) * 114) / 1000)
+                    as usize;
+            let index = ((255 - luminance) * (chars.len() - 1)) / 255;
+            let glyph = if chars[index] == ' ' {
+                "&nbsp;".to_string()
+            } else {
+                chars[index].to_string()
+            };
+            output.push_str(&format!(
+                "<span style=\"color:#{red:02x}{green:02x}{blue:02x}\">{}</span>",
+                glyph
+            ));
+        }
+    }
+    output.push_str("</pre>");
+    Ok(output)
 }
 
 fn ascii_art_placeholder() -> &'static str {
